@@ -75,7 +75,7 @@
                 const row = document.createElement('div');
                 row.className = 'flex justify-between items-center text-xs border-b pb-1.5';
                 row.innerHTML = `
-                    <span class="font-bold text-gray-700">${s.name}</span>
+                    <span class="font-bold text-gray-700">${s.name} ${s.is_seller ? '☕' : ''}</span>
                     <span class="bg-amber-100 text-amber-800 px-2 py-0.5 rounded font-bold">${count} 回利用</span>
                 `;
                 rankingEl.appendChild(row);
@@ -107,7 +107,7 @@
         };
 
 
-        // --- 🏪 店舗管理機能 (PINコード・位置情報対応) ---
+        // --- 🏪 店舗管理機能 (PINコード・位置情報・販売店フラグ対応) ---
         async function loadStores() {
             const querySnapshot = await getDocs(collection(db, "stores"));
             const listEl = document.getElementById('admin-store-list');
@@ -131,7 +131,8 @@
                         <div>
                             <span class="font-bold text-gray-800">${store.name}</span>
                             <span class="text-xs font-mono text-gray-400">(${id})</span>
-                            ${store.active === false ? '<span class="ml-2 text-xs bg-gray-300 text-gray-700 px-1.5 py-0.5 rounded">非公開</span>' : '<span class="ml-2 text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded">公開中</span>'}
+                            ${store.is_seller ? '<span class="ml-1 text-xs bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-bold">☕ 販売店</span>' : ''}
+                            ${store.active === false ? '<span class="ml-1 text-xs bg-gray-300 text-gray-700 px-1.5 py-0.5 rounded">非公開</span>' : '<span class="ml-1 text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded">公開中</span>'}
                         </div>
                         <div class="flex gap-1 shrink-0">
                             <button onclick="editStore('${id}')" class="text-xs bg-blue-100 text-blue-700 font-bold px-2 py-1 rounded hover:bg-blue-200">編集</button>
@@ -178,6 +179,7 @@
             document.getElementById('store-url').value = store.url || '';
             document.getElementById('store-image-url').value = store.image_url || '';
             document.getElementById('store-benefit').value = store.benefit || '';
+            document.getElementById('store-seller').checked = store.is_seller === true;
             document.getElementById('store-active').checked = store.active !== false;
 
             document.getElementById('form-title').innerText = '✏️ 店舗情報の編集・更新';
@@ -203,6 +205,7 @@
             document.getElementById('store-url').value = '';
             document.getElementById('store-image-url').value = '';
             document.getElementById('store-benefit').value = '';
+            document.getElementById('store-seller').checked = false;
             document.getElementById('store-active').checked = true;
 
             document.getElementById('form-title').innerText = '＋ 参加店舗の追加・編集';
@@ -222,6 +225,7 @@
             const url = document.getElementById('store-url').value.trim();
             const image_url = document.getElementById('store-image-url').value.trim();
             const benefit = document.getElementById('store-benefit').value.trim();
+            const is_seller = document.getElementById('store-seller').checked;
             const active = document.getElementById('store-active').checked;
 
             if (!id || !name || !benefit) {
@@ -231,7 +235,7 @@
 
             try {
                 await setDoc(doc(db, "stores", id), {
-                    name, pin, address, lat, lng, tel, hours, url, image_url, benefit, active
+                    name, pin, address, lat, lng, tel, hours, url, image_url, benefit, is_seller, active
                 }, { merge: true });
 
                 alert(`店舗「${name}」を保存しました！`);
@@ -478,12 +482,21 @@
                         <label class="block text-xs text-gray-500 mb-1">提供特典</label>
                         <textarea id="store-benefit" placeholder="例: お会計から100円引き" class="w-full border p-2 rounded h-16"></textarea>
                     </div>
-                    <div class="flex items-center gap-2">
+
+                    <div class="p-3 bg-amber-50 rounded-lg border border-amber-200 space-y-1">
+                        <div class="flex items-center gap-2">
+                            <input type="checkbox" id="store-seller" class="rounded border-amber-300 text-amber-600 focus:ring-amber-500">
+                            <label for="store-seller" class="text-xs font-bold text-amber-900">☕ 珈琲バッグ設置店舗（販売店）に設定</label>
+                        </div>
+                        <p class="text-[11px] text-amber-700">※チェックを入れると、QR未認証の一般ユーザーも検索・閲覧できるようになります。</p>
+                    </div>
+
+                    <div class="flex items-center gap-2 pt-1">
                         <input type="checkbox" id="store-active" checked class="rounded border-gray-300">
                         <label for="store-active" class="text-xs font-bold text-gray-700">店舗一覧に公開する</label>
                     </div>
 
-                    <div class="flex gap-2">
+                    <div class="flex gap-2 pt-2">
                         <button id="submit-btn" onclick="addStore()" class="flex-1 bg-green-600 text-white font-bold py-2.5 rounded hover:bg-green-700 transition">店舗をデータベースに保存</button>
                         <button id="cancel-edit-btn" onclick="cancelEdit()" class="hidden bg-gray-400 text-white font-bold px-4 rounded hover:bg-gray-500 transition">キャンセル</button>
                     </div>

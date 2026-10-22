@@ -31,9 +31,12 @@
         let currentPassData = null;
         let allStores = [];
         let currentFilter = 'all';
+        let isActivated = false;
 
-        // ページ読み込み完了時：記憶されたコードがあれば自動ログイン、なければ未認証画面を表示
-        window.addEventListener('DOMContentLoaded', () => {
+        // ページ読み込み完了時
+        window.addEventListener('DOMContentLoaded', async () => {
+            await fetchAllStores();
+
             const savedCode = localStorage.getItem('ono_active_code');
             const urlCode = new URLSearchParams(window.location.search).get('code');
             const targetCode = urlCode || savedCode;
@@ -44,6 +47,22 @@
                 showView('not-activated-view');
             }
         });
+
+        // 店舗データ全件取得
+        async function fetchAllStores() {
+            try {
+                const storesSnapshot = await getDocs(collection(db, "stores"));
+                allStores = [];
+                storesSnapshot.forEach((storeDoc) => {
+                    const data = storeDoc.data();
+                    if (data.active !== false) {
+                        allStores.push({ id: storeDoc.id, ...data });
+                    }
+                });
+            } catch (error) {
+                console.error("Error fetching stores:", error);
+            }
+        }
 
         async function checkAndInitPass(code) {
             showView('loading-view');
@@ -56,10 +75,9 @@
                     currentPassData = docSnap.data();
                     if (!currentPassData.favorites) currentPassData.favorites = [];
                     
-                    // ブラウザにコードを自動保存
                     localStorage.setItem('ono_active_code', code);
-                    
-                    await fetchStoresAndRender();
+                    isActivated = true;
+                    renderActivatedDashboard();
                 } else {
                     showErrorModal(`コード「${code}」は登録されていません。(NG)`);
                     localStorage.removeItem('ono_active_code');
@@ -72,21 +90,29 @@
             }
         }
 
-        async function fetchStoresAndRender() {
+        // --- 未認証モード（珈琲バッグ設置店舗のみ表示） ---
+        window.showSellerStoresOnly = function() {
+            isActivated = false;
             showView('activated-view');
+            document.getElementById('status-banner-activated').classList.add('hidden');
+            document.getElementById('status-banner-unactivated').classList.remove('hidden');
+            document.getElementById('btn-tab-history').classList.add('hidden');
+            document.getElementById('fav-filter-container').classList.add('hidden');
+
+            applyFilterAndRender();
+        };
+
+        // --- 認証完了モード（全店舗表示） ---
+        function renderActivatedDashboard() {
+            showView('activated-view');
+            document.getElementById('status-banner-unactivated').classList.add('hidden');
+            document.getElementById('status-banner-activated').classList.remove('hidden');
+            document.getElementById('btn-tab-history').classList.remove('hidden');
+            document.getElementById('fav-filter-container').classList.remove('hidden');
 
             const expireDate = currentPassData.expires_at ? currentPassData.expires_at.toDate().toLocaleDateString() : '未設定';
             document.getElementById('expire-date').innerText = `有効期限: ${expireDate} まで`;
             document.getElementById('display-active-code').innerText = currentCode;
-
-            const storesSnapshot = await getDocs(collection(db, "stores"));
-            allStores = [];
-            storesSnapshot.forEach((storeDoc) => {
-                const data = storeDoc.data();
-                if (data.active !== false) {
-                    allStores.push({ id: storeDoc.id, ...data });
-                }
-            });
 
             applyFilterAndRender();
             renderHistoryList();
@@ -94,11 +120,12 @@
 
         window.applyFilterAndRender = function() {
             const keyword = document.getElementById('store-search-input').value.trim().toLowerCase();
-            const favorites = currentPassData.favorites || [];
+            const favorites = (currentPassData && currentPassData.favorites) ? currentPassData.favorites : [];
 
-            let targetStores = allStores;
+            // 未認証なら設置店舗（is_seller）のみ、認証済みなら全店舗
+            let targetStores = isActivated ? allStores : allStores.filter(s => s.is_seller === true);
 
-            if (currentFilter === 'favorites') {
+            if (isActivated && currentFilter === 'favorites') {
                 targetStores = targetStores.filter(store => favorites.includes(store.id));
             }
 
@@ -112,14 +139,14 @@
             }
 
             renderStoresList(targetStores);
-        }
+        };
 
         function renderStoresList(storesToRender) {
             const storeListEl = document.getElementById('store-list');
             storeListEl.innerHTML = '';
 
-            const usedStores = currentPassData.used_stores || [];
-            const favorites = currentPassData.favorites || [];
+            const usedStores = (currentPassData && currentPassData.used_stores) ? currentPassData.used_stores : [];
+            const favorites = (currentPassData && currentPassData.favorites) ? currentPassData.favorites : [];
 
             if (storesToRender.length === 0) {
                 storeListEl.innerHTML = `<p class="text-xs text-gray-400 text-center py-6">該当する店舗が見つかりませんでした。</p>`;
@@ -143,12 +170,20 @@
                     <div class="p-4">
                         <div class="flex justify-between items-start mb-2">
                             <div class="flex items-center gap-2">
-                                <button onclick="toggleFavorite('${storeId}')" class="text-lg focus:outline-none transition transform active:scale-125" title="お気に入り">
-                                    ${isFav ? '⭐' : '☆'}
-                                </button>
-                                <h3 class="font-bold text-gray-800 text-base">${store.name}</h3>
+                                ${isActivated ? `
+                                    <button onclick="toggleFavorite('${storeId}')" class="text-lg focus:outline-none transition transform active:scale-125" title="お気に入り">
+                                        ${isFav ? '⭐' : '☆'}
+                                    </button>
+                                ` : ''}
+                                <h3 class="font-bold text-gray-800 text-base flex items-center gap-1">
+                                    ${store.name}
+                                    ${store.is_seller ? '<span class="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-bold">☕ 販売店</span>' : ''}
+                                </h3>
                             </div>
-                            ${isUsed ? `<span class="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded font-bold shrink-0">利用済み</span>` : `<span class="text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded font-bold shrink-0">利用可能</span>`}
+                            ${isActivated 
+                                ? (isUsed ? `<span class="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded font-bold shrink-0">利用済み</span>` : `<span class="text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded font-bold shrink-0">利用可能</span>`)
+                                : `<span class="text-xs bg-gray-100 text-gray-500 px-2 py-1 rounded font-bold shrink-0">取扱店舗</span>`
+                            }
                         </div>
                         <div class="text-xs text-gray-500 space-y-1 mb-3">
                             <div class="flex justify-between items-center">
@@ -162,9 +197,12 @@
                         <div class="bg-amber-50 p-2.5 rounded-lg text-xs text-amber-900 mb-3 border border-amber-100">
                             🎁 <strong>特典:</strong> ${store.benefit}
                         </div>
-                        ${isUsed 
-                            ? `<button disabled class="w-full bg-gray-200 text-gray-400 font-bold py-2 rounded-lg text-sm cursor-not-allowed">利用済みです</button>`
-                            : `<button onclick="promptPinAndUse('${currentCode}', '${storeId}', '${store.name}', '${store.pin || '1234'}')" class="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-2 rounded-lg text-sm shadow transition">特典を利用する（店頭でタップ）</button>`
+                        ${isActivated 
+                            ? (isUsed 
+                                ? `<button disabled class="w-full bg-gray-200 text-gray-400 font-bold py-2 rounded-lg text-sm cursor-not-allowed">利用済みです</button>`
+                                : `<button onclick="promptPinAndUse('${currentCode}', '${storeId}', '${store.name}', '${store.pin || '1234'}')" class="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-2 rounded-lg text-sm shadow transition">特典を利用する（店頭でタップ）</button>`
+                              )
+                            : `<button onclick="startScanner()" class="w-full bg-gray-800 hover:bg-gray-900 text-white font-bold py-2.5 rounded-lg text-xs shadow transition flex items-center justify-center gap-1">📷 購入後にQRスキャンで特典解放</button>`
                         }
                     </div>
                 `;
@@ -173,6 +211,7 @@
         }
 
         window.toggleFavorite = async function(storeId) {
+            if (!isActivated) return;
             const favorites = currentPassData.favorites || [];
             const isFav = favorites.includes(storeId);
 
@@ -209,7 +248,7 @@
         };
 
         function renderHistoryList() {
-            const usedStores = currentPassData.used_stores || [];
+            const usedStores = (currentPassData && currentPassData.used_stores) ? currentPassData.used_stores : [];
             const historyListEl = document.getElementById('history-list');
             historyListEl.innerHTML = '';
 
@@ -337,13 +376,11 @@
             checkAndInitPass(code);
         };
 
-        // 🚪 ログオフ処理（記憶を解除して初期スキャン画面に戻る）
         window.logout = function() {
             if (confirm('パスポートの認証を解除（ログオフ）しますか？\n※再度利用する場合はQRコードの読み取りが必要になります。')) {
                 localStorage.removeItem('ono_active_code');
                 currentCode = null;
                 currentPassData = null;
-                // URLからパラメータを取り除いてリロード
                 window.location.href = window.location.pathname;
             }
         };
@@ -397,37 +434,71 @@
 </head>
 <body class="bg-amber-50 text-gray-800 font-sans min-h-screen flex flex-col">
 
-    <header class="bg-amber-800 text-white p-4 shadow-md text-center relative">
+    <header class="bg-amber-800 text-white p-4 shadow-md text-center">
         <h1 class="text-xl font-bold">☕ 小野めぐり珈琲バッグ</h1>
-        <p class="text-xs text-amber-200 mt-1">デジタルパスポート（完全版）</p>
+        <p class="text-xs text-amber-200 mt-1">デジタルパスポート</p>
     </header>
 
     <main class="flex-1 max-w-md w-full mx-auto p-4 pb-20">
 
-        <!-- 未有効化 -->
-        <section id="not-activated-view" class="bg-white rounded-xl p-6 shadow-sm text-center mt-6">
-            <h2 class="text-lg font-bold text-gray-800 mb-2">パスポートの認証</h2>
-            <p class="text-sm text-gray-600 mb-4">QRコードを読み取るか、コードを直接入力してください。</p>
-            
-            <button onclick="startScanner()" class="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 px-4 rounded-lg shadow transition mb-4 flex items-center justify-center gap-2">
-                <span>📷</span> QRコードを読み取る
-            </button>
+        <!-- 未有効化（初期案内画面） -->
+        <section id="not-activated-view" class="mt-2 hidden space-y-4">
 
-            <!-- 手入力フォーム -->
-            <div class="border-t border-gray-100 pt-4 mb-4 text-left">
-                <label class="block text-xs font-bold text-gray-600 mb-1">シリアルコードを直接入力</label>
-                <div class="flex gap-2">
-                    <input type="text" id="manual-code-input" placeholder="例: ONO-0001" class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-amber-600 uppercase">
-                    <button onclick="submitManualCode()" class="bg-amber-800 hover:bg-amber-900 text-white font-bold px-4 py-2 rounded-lg text-xs transition shrink-0">認証する</button>
+            <!-- 🌟 コンセプト紹介バナーカード -->
+            <div class="bg-gradient-to-br from-amber-800 to-amber-900 text-white rounded-2xl p-5 shadow-md text-left">
+                <div class="flex items-center gap-2 mb-2">
+                    <span class="text-xl">☕</span>
+                    <h3 class="font-bold text-base text-amber-100">小野めぐり珈琲バッグとは？</h3>
+                </div>
+                
+                <p class="text-xs text-amber-50/90 leading-relaxed mb-4">
+                    珈琲バッグを手に入れて、小野市のステキなお店をめぐるデジタルスタンプラリー！<br>
+                    お店でデジタルパスポートを提示すると、各店オリジナルの特典が受けられます。知らなかったお店や新しい魅力を見つけてみませんか？
+                </p>
+
+                <!-- 簡単3ステップ案内 -->
+                <div class="grid grid-cols-3 gap-1 text-center text-[10px] bg-black/20 p-2.5 rounded-xl font-medium border border-white/10">
+                    <div>
+                        <div class="text-base mb-0.5">☕</div>
+                        <div>設置店で購入</div>
+                    </div>
+                    <div class="border-l border-white/20 pl-0.5">
+                        <div class="text-base mb-0.5">📷</div>
+                        <div>QRで認証</div>
+                    </div>
+                    <div class="border-l border-white/20 pl-0.5">
+                        <div class="text-base mb-0.5">🎁</div>
+                        <div>店舗で特典GET</div>
+                    </div>
                 </div>
             </div>
 
-            <button onclick="testActivate()" class="w-full bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold py-2 px-4 rounded-lg text-xs transition">
-                【テスト】新規コードを作成してDB登録＆読み込み
-            </button>
+            <!-- アクションエリア（認証・検索ボタン群） -->
+            <div class="bg-white rounded-xl p-5 shadow-sm text-center">
+                <button onclick="startScanner()" class="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-3.5 px-4 rounded-xl shadow transition mb-3 flex items-center justify-center gap-2 text-sm">
+                    <span>📷</span> QRコードを読み取る（認証）
+                </button>
+
+                <!-- 手入力フォーム -->
+                <div class="border-t border-gray-100 pt-4 mb-4 text-left">
+                    <label class="block text-xs font-bold text-gray-600 mb-1">シリアルコードを直接入力</label>
+                    <div class="flex gap-2">
+                        <input type="text" id="manual-code-input" placeholder="例: ONO-0001" class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-amber-600 uppercase">
+                        <button onclick="submitManualCode()" class="bg-amber-800 hover:bg-amber-900 text-white font-bold px-4 py-2 rounded-lg text-xs transition shrink-0">認証する</button>
+                    </div>
+                </div>
+
+                <button onclick="showSellerStoresOnly()" class="w-full bg-amber-100 hover:bg-amber-200 text-amber-900 font-bold py-3 px-4 rounded-xl transition text-xs flex items-center justify-center gap-1 mb-4">
+                    <span>📍</span> 珈琲バッグが買えるお店（設置店舗）を探す
+                </button>
+
+                <button onclick="testActivate()" class="w-full bg-gray-100 hover:bg-gray-200 text-gray-500 font-bold py-2 px-4 rounded-lg text-[11px] transition">
+                    【テスト】新規コードを作成してDB登録＆読み込み
+                </button>
+            </div>
         </section>
 
-        <!-- QRスキャナー -->
+        <!-- QRスキャナーモーダル -->
         <div id="scanner-container" class="fixed inset-0 bg-black/80 z-50 flex flex-col items-center justify-center p-4 hidden">
             <div class="bg-white rounded-xl p-4 w-full max-w-xs text-center shadow-2xl">
                 <h3 class="font-bold text-gray-800 mb-2 text-sm">QRコードを枠内にかざしてください</h3>
@@ -438,7 +509,7 @@
             </div>
         </div>
 
-        <!-- エラーモーダル -->
+        <!-- NGモーダル -->
         <div id="error-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 hidden">
             <div class="bg-white rounded-xl p-6 w-full max-w-xs text-center shadow-lg border-2 border-red-500">
                 <div class="text-red-500 font-bold text-4xl mb-2">✕ NG</div>
@@ -455,10 +526,18 @@
             <p class="text-amber-800 font-bold animate-pulse">データを読み込んでいます...</p>
         </section>
 
-        <!-- 有効化済み -->
+        <!-- 有効化済み・店舗一覧画面 -->
         <section id="activated-view" class="hidden">
-            <!-- 認証ステータスカード ＋ ログオフボタン -->
-            <div class="bg-white rounded-xl p-4 shadow-sm mb-3 border-l-4 border-amber-600 flex justify-between items-start">
+
+            <!-- 未認証状態案内バナー -->
+            <div id="status-banner-unactivated" class="bg-amber-100 border-l-4 border-amber-600 p-3 rounded-r-xl mb-3 text-xs text-amber-900 hidden">
+                <div class="font-bold mb-1">📍 珈琲バッグ設置店舗（販売店）を表示中</div>
+                <div>お店で珈琲バッグを購入し、QRコードを読み取ると**全参加店舗の特典クーポン**が解放されます！</div>
+                <button onclick="startScanner()" class="mt-2 w-full bg-amber-700 hover:bg-amber-800 text-white font-bold py-1.5 rounded text-xs transition">📷 QRコードを読み込む</button>
+            </div>
+
+            <!-- 認証完了ステータスカード -->
+            <div id="status-banner-activated" class="bg-white rounded-xl p-4 shadow-sm mb-3 border-l-4 border-amber-600 flex justify-between items-start hidden">
                 <div>
                     <div class="flex items-center gap-2 mb-1">
                         <span class="text-xs font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded">パスポート認証済み</span>
@@ -479,21 +558,24 @@
             <!-- タブ切り替え -->
             <div class="flex bg-amber-200/60 rounded-lg p-1 mb-3">
                 <button id="btn-tab-stores" onclick="document.getElementById('tab-stores').classList.remove('hidden'); document.getElementById('tab-history').classList.add('hidden'); this.classList.add('bg-white','shadow-sm'); document.getElementById('btn-tab-history').classList.remove('bg-white','shadow-sm');" class="flex-1 py-2 text-sm font-bold rounded-md bg-white shadow-sm transition">参加店舗一覧</button>
-                <button id="btn-tab-history" onclick="document.getElementById('tab-stores').classList.add('hidden'); document.getElementById('tab-history').classList.remove('hidden'); this.classList.add('bg-white','shadow-sm'); document.getElementById('btn-tab-stores').classList.remove('bg-white','shadow-sm');" class="flex-1 py-2 text-sm font-bold rounded-md transition">利用履歴</button>
+                <button id="btn-tab-history" onclick="document.getElementById('tab-stores').classList.add('hidden'); document.getElementById('tab-history').classList.remove('hidden'); this.classList.add('bg-white','shadow-sm'); document.getElementById('btn-tab-stores').classList.remove('bg-white','shadow-sm');" class="flex-1 py-2 text-sm font-bold rounded-md transition hidden">利用履歴</button>
             </div>
 
             <!-- 店舗一覧タブ -->
             <div id="tab-stores" class="space-y-3">
+                <!-- 検索バー -->
                 <div class="relative">
                     <input type="text" id="store-search-input" oninput="applyFilterAndRender()" placeholder="🔍 店舗名・住所・特典で検索..." class="w-full bg-white border border-amber-200 rounded-xl py-2.5 px-4 pl-10 text-xs shadow-sm focus:outline-none focus:ring-2 focus:ring-amber-600">
                     <span class="absolute left-3 top-2.5 text-gray-400 text-sm">🔍</span>
                 </div>
 
-                <div class="flex bg-amber-100 rounded-lg p-1">
+                <!-- お気に入りフィルター（認証時のみ表示） -->
+                <div id="fav-filter-container" class="flex bg-amber-100 rounded-lg p-1 hidden">
                     <button id="filter-btn-all" onclick="switchStoreFilter('all')" class="flex-1 py-1.5 text-xs font-bold rounded-md bg-white shadow-sm text-amber-900 transition">すべての店舗</button>
                     <button id="filter-btn-fav" onclick="switchStoreFilter('favorites')" class="flex-1 py-1.5 text-xs font-bold rounded-md text-gray-600 transition">⭐ お気に入りのみ</button>
                 </div>
 
+                <!-- 店舗カードリスト -->
                 <div id="store-list" class="space-y-3"></div>
             </div>
 
