@@ -28,6 +28,7 @@
 
         let cachedStores = [];
         let cachedCodes = [];
+        let editingStoreId = null; // 編集中の店舗ID保持用
 
         // 認証判定
         window.checkPassword = function() {
@@ -67,7 +68,6 @@
             document.getElementById('stat-active-codes').innerText = activeCodesCount;
             document.getElementById('stat-total-use').innerText = totalRedemptions;
 
-            // 店舗別利用ランキング
             const rankingEl = document.getElementById('analytics-store-ranking');
             rankingEl.innerHTML = '';
             cachedStores.forEach(s => {
@@ -107,7 +107,7 @@
         };
 
 
-        // --- 🏪 店舗管理機能 (PINコード・位置情報・販売店フラグ対応) ---
+        // --- 🏪 店舗管理機能 ---
         async function loadStores() {
             const querySnapshot = await getDocs(collection(db, "stores"));
             const listEl = document.getElementById('admin-store-list');
@@ -143,7 +143,6 @@
                         <div>📍 ${store.address || '未設定'} | 📞 ${store.tel || '未設定'} | 🔑 PIN: <strong class="text-amber-800">${store.pin || '1234'}</strong></div>
                         <div>🕒 ${store.hours || '未設定'}</div>
                         <div class="text-amber-800 font-bold">🎁 特典: ${store.benefit}</div>
-                        ${store.lat && store.lng ? `<div class="text-gray-400 text-[10px]">🌐 緯度経度設定済み (${store.lat}, ${store.lng})</div>` : ''}
                         ${store.url ? `<div class="text-blue-600 truncate">🔗 <a href="${store.url}" target="_blank" class="underline">${store.url}</a></div>` : ''}
                     </div>
                 `;
@@ -151,7 +150,8 @@
             });
         }
 
-        window.autoGenerateStoreId = async function() {
+        // 店舗ID完全自動生成 (例: store_01)
+        function generateNextStoreId() {
             let maxNum = 0;
             cachedStores.forEach(s => {
                 const match = s.id.match(/^store_(\d+)$/);
@@ -160,20 +160,17 @@
                     if (num > maxNum) maxNum = num;
                 }
             });
-            document.getElementById('store-id').value = `store_${String(maxNum + 1).padStart(2, '0')}`;
-        };
+            return `store_${String(maxNum + 1).padStart(2, '0')}`;
+        }
 
         window.editStore = function(id) {
             const store = cachedStores.find(s => s.id === id);
             if (!store) return;
 
-            document.getElementById('store-id').value = store.id;
-            document.getElementById('store-id').readOnly = true;
+            editingStoreId = id;
             document.getElementById('store-name').value = store.name || '';
             document.getElementById('store-pin').value = store.pin || '1234';
             document.getElementById('store-address').value = store.address || '';
-            document.getElementById('store-lat').value = store.lat || '';
-            document.getElementById('store-lng').value = store.lng || '';
             document.getElementById('store-tel').value = store.tel || '';
             document.getElementById('store-hours').value = store.hours || '';
             document.getElementById('store-url').value = store.url || '';
@@ -193,13 +190,10 @@
         };
 
         function resetForm() {
-            document.getElementById('store-id').value = '';
-            document.getElementById('store-id').readOnly = false;
+            editingStoreId = null;
             document.getElementById('store-name').value = '';
             document.getElementById('store-pin').value = '1234';
             document.getElementById('store-address').value = '';
-            document.getElementById('store-lat').value = '';
-            document.getElementById('store-lng').value = '';
             document.getElementById('store-tel').value = '';
             document.getElementById('store-hours').value = '';
             document.getElementById('store-url').value = '';
@@ -208,18 +202,15 @@
             document.getElementById('store-seller').checked = false;
             document.getElementById('store-active').checked = true;
 
-            document.getElementById('form-title').innerText = '＋ 参加店舗の追加・編集';
+            document.getElementById('form-title').innerText = '＋ 参加店舗の追加';
             document.getElementById('submit-btn').innerText = '店舗をデータベースに保存';
             document.getElementById('cancel-edit-btn').classList.add('hidden');
         }
 
         window.addStore = async function() {
-            const id = document.getElementById('store-id').value.trim();
             const name = document.getElementById('store-name').value.trim();
             const pin = document.getElementById('store-pin').value.trim() || '1234';
             const address = document.getElementById('store-address').value.trim();
-            const lat = document.getElementById('store-lat').value.trim();
-            const lng = document.getElementById('store-lng').value.trim();
             const tel = document.getElementById('store-tel').value.trim();
             const hours = document.getElementById('store-hours').value.trim();
             const url = document.getElementById('store-url').value.trim();
@@ -228,14 +219,16 @@
             const is_seller = document.getElementById('store-seller').checked;
             const active = document.getElementById('store-active').checked;
 
-            if (!id || !name || !benefit) {
-                alert('ID、店舗名、特典内容は必須です');
+            if (!name || !benefit) {
+                alert('店舗名、特典内容は必須です');
                 return;
             }
 
+            const targetId = editingStoreId || generateNextStoreId();
+
             try {
-                await setDoc(doc(db, "stores", id), {
-                    name, pin, address, lat, lng, tel, hours, url, image_url, benefit, is_seller, active
+                await setDoc(doc(db, "stores", targetId), {
+                    name, pin, address, tel, hours, url, image_url, benefit, is_seller, active
                 }, { merge: true });
 
                 alert(`店舗「${name}」を保存しました！`);
@@ -295,6 +288,19 @@
                 listEl.appendChild(item);
             });
         }
+
+        window.deleteCode = async function(codeId) {
+            if (confirm(`シリアルコード「${codeId}」を削除しますか？\n※この操作は取り消せません。`)) {
+                try {
+                    await deleteDoc(doc(db, "codes", codeId));
+                    alert(`コード「${codeId}」を削除しました`);
+                    await refreshData();
+                } catch (error) {
+                    console.error("Error deleting code:", error);
+                    alert("コードの削除に失敗しました");
+                }
+            }
+        };
 
         window.filterCodes = function() {
             const keyword = document.getElementById('code-search-input').value.trim().toUpperCase();
@@ -379,7 +385,7 @@
 <body class="bg-gray-100 text-gray-800 font-sans min-h-screen">
 
     <header class="bg-gray-800 text-white p-4 text-center font-bold shadow">
-        ⚙️ 小野めぐり珈琲バッグ 管理者ページ（完全版）
+        ⚙️ 小野めぐり珈琲バッグ 管理者ページ
     </header>
 
     <main class="max-w-lg mx-auto p-4 pb-16">
@@ -429,15 +435,8 @@
 
             <!-- 2. 🏪 店舗追加・編集フォーム -->
             <div class="bg-white p-5 rounded-xl shadow-sm border">
-                <h3 id="form-title" class="font-bold text-gray-800 border-b pb-2 mb-4">＋ 参加店舗の追加・編集</h3>
+                <h3 id="form-title" class="font-bold text-gray-800 border-b pb-2 mb-4">＋ 参加店舗の追加</h3>
                 <div class="space-y-3 text-sm">
-                    <div>
-                        <div class="flex justify-between items-center mb-1">
-                            <label class="block text-xs text-gray-500">店舗ID (英数字・重複不可)</label>
-                            <button type="button" onclick="autoGenerateStoreId()" class="text-xs text-amber-700 hover:underline">✨ 自動生成</button>
-                        </div>
-                        <input type="text" id="store-id" placeholder="例: store_01" class="w-full border p-2 rounded read-only:bg-gray-100">
-                    </div>
                     <div>
                         <label class="block text-xs text-gray-500 mb-1">店舗名</label>
                         <input type="text" id="store-name" placeholder="例: 小野珈琲 ロースターズ" class="w-full border p-2 rounded">
@@ -446,29 +445,19 @@
                         <label class="block text-xs text-gray-500 mb-1">消込用4桁PINコード（指定しない場合1234）</label>
                         <input type="text" id="store-pin" value="1234" class="w-full border p-2 rounded font-bold text-amber-800">
                     </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">住所</label>
+                        <input type="text" id="store-address" placeholder="例: 兵庫県小野市本町1-2" class="w-full border p-2 rounded">
+                    </div>
                     <div class="grid grid-cols-2 gap-2">
-                        <div>
-                            <label class="block text-xs text-gray-500 mb-1">住所</label>
-                            <input type="text" id="store-address" placeholder="例: 小野市本町1-2" class="w-full border p-2 rounded">
-                        </div>
                         <div>
                             <label class="block text-xs text-gray-500 mb-1">電話番号</label>
                             <input type="tel" id="store-tel" placeholder="例: 0794-xx-xxxx" class="w-full border p-2 rounded">
                         </div>
-                    </div>
-                    <div class="grid grid-cols-2 gap-2">
                         <div>
-                            <label class="block text-xs text-gray-500 mb-1">緯度 (任意/GPS用)</label>
-                            <input type="text" id="store-lat" placeholder="例: 34.8533" class="w-full border p-2 rounded text-xs">
+                            <label class="block text-xs text-gray-500 mb-1">営業時間・定休日</label>
+                            <input type="text" id="store-hours" placeholder="例: 9:00 - 18:00 (水曜定休)" class="w-full border p-2 rounded">
                         </div>
-                        <div>
-                            <label class="block text-xs text-gray-500 mb-1">経度 (任意/GPS用)</label>
-                            <input type="text" id="store-lng" placeholder="例: 134.9412" class="w-full border p-2 rounded text-xs">
-                        </div>
-                    </div>
-                    <div>
-                        <label class="block text-xs text-gray-500 mb-1">営業時間・定休日</label>
-                        <input type="text" id="store-hours" placeholder="例: 9:00 - 18:00 (水曜定休)" class="w-full border p-2 rounded">
                     </div>
                     <div>
                         <label class="block text-xs text-gray-500 mb-1">公式URL (Webサイト/SNS)</label>
