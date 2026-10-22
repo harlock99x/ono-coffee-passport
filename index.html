@@ -3,15 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>小野めぐり珈琲バッグ デジタルパスポート（DB連携版）</title>
+    <title>小野めぐり珈琲バッグ デジタルパスポート</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- HTML5 QR Code Scanner Library -->
-    <script src="https://unpkg.com/html5-qrcode"></script>
+    <script src="https://unpkg.com/html5-qrcode" defer></script>
     <!-- Firebase SDK (v9 Modular) -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getFirestore, doc, getDoc, setDoc, updateDoc, collection, getDocs, arrayUnion, Timestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getFirestore, doc, getDoc, setDoc, updateDoc, collection, getDocs, arrayUnion, arrayRemove, Timestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
         const firebaseConfig = {
           apiKey: "AIzaSyAcLiObsI5p_dpGfpERStBHx2J322sO95U",
@@ -23,20 +23,28 @@
           measurementId: "G-585ENGFG8G"
         };
 
-        // Firebase初期化
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // 現在のセッションコード
         let currentCode = null;
         let html5QrCode = null;
+        let currentPassData = null;
+        let allStores = [];
+        let currentFilter = 'all';
 
-        // ページ読み込み時は常に未スキャン状態を表示（スキップ防止）
+        // ページ読み込み完了時：記憶されたコードがあれば自動ログイン、なければ未認証画面を表示
         window.addEventListener('DOMContentLoaded', () => {
-            showView('not-activated-view');
+            const savedCode = localStorage.getItem('ono_active_code');
+            const urlCode = new URLSearchParams(window.location.search).get('code');
+            const targetCode = urlCode || savedCode;
+
+            if (targetCode) {
+                checkAndInitPass(targetCode);
+            } else {
+                showView('not-activated-view');
+            }
         });
 
-        // パスポートの有効性確認 & 初期化
         async function checkAndInitPass(code) {
             showView('loading-view');
             try {
@@ -45,11 +53,16 @@
 
                 if (docSnap.exists()) {
                     currentCode = code;
-                    const data = docSnap.data();
-                    renderDashboard(data);
+                    currentPassData = docSnap.data();
+                    if (!currentPassData.favorites) currentPassData.favorites = [];
+                    
+                    // ブラウザにコードを自動保存
+                    localStorage.setItem('ono_active_code', code);
+                    
+                    await fetchStoresAndRender();
                 } else {
-                    // DBに登録が存在しない場合はNGを表示
                     showErrorModal(`コード「${code}」は登録されていません。(NG)`);
+                    localStorage.removeItem('ono_active_code');
                     showView('not-activated-view');
                 }
             } catch (error) {
@@ -59,79 +72,227 @@
             }
         }
 
-        // ダッシュボード描画
-        async function renderDashboard(passData) {
+        async function fetchStoresAndRender() {
             showView('activated-view');
-            
-            const expireDate = passData.expires_at ? passData.expires_at.toDate().toLocaleDateString() : '未設定';
+
+            const expireDate = currentPassData.expires_at ? currentPassData.expires_at.toDate().toLocaleDateString() : '未設定';
             document.getElementById('expire-date').innerText = `有効期限: ${expireDate} まで`;
+            document.getElementById('display-active-code').innerText = currentCode;
 
             const storesSnapshot = await getDocs(collection(db, "stores"));
+            allStores = [];
+            storesSnapshot.forEach((storeDoc) => {
+                const data = storeDoc.data();
+                if (data.active !== false) {
+                    allStores.push({ id: storeDoc.id, ...data });
+                }
+            });
+
+            applyFilterAndRender();
+            renderHistoryList();
+        }
+
+        window.applyFilterAndRender = function() {
+            const keyword = document.getElementById('store-search-input').value.trim().toLowerCase();
+            const favorites = currentPassData.favorites || [];
+
+            let targetStores = allStores;
+
+            if (currentFilter === 'favorites') {
+                targetStores = targetStores.filter(store => favorites.includes(store.id));
+            }
+
+            if (keyword) {
+                targetStores = targetStores.filter(store => {
+                    const nameMatch = store.name && store.name.toLowerCase().includes(keyword);
+                    const addressMatch = store.address && store.address.toLowerCase().includes(keyword);
+                    const benefitMatch = store.benefit && store.benefit.toLowerCase().includes(keyword);
+                    return nameMatch || addressMatch || benefitMatch;
+                });
+            }
+
+            renderStoresList(targetStores);
+        }
+
+        function renderStoresList(storesToRender) {
             const storeListEl = document.getElementById('store-list');
             storeListEl.innerHTML = '';
 
-            const usedStores = passData.used_stores || [];
+            const usedStores = currentPassData.used_stores || [];
+            const favorites = currentPassData.favorites || [];
+
+            if (storesToRender.length === 0) {
+                storeListEl.innerHTML = `<p class="text-xs text-gray-400 text-center py-6">該当する店舗が見つかりませんでした。</p>`;
+                return;
+            }
+
+            storesToRender.forEach((store) => {
+                const storeId = store.id;
+                const isUsed = usedStores.includes(storeId);
+                const isFav = favorites.includes(storeId);
+
+                const mapUrl = store.lat && store.lng 
+                    ? `https://www.google.com/maps/search/?api=1&query=${store.lat},${store.lng}`
+                    : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(store.name + ' ' + (store.address||''))}`;
+
+                const card = document.createElement('div');
+                card.className = `bg-white rounded-xl overflow-hidden shadow-sm border ${isUsed ? 'border-gray-200 opacity-75' : 'border-amber-100'}`;
+                
+                card.innerHTML = `
+                    ${store.image_url ? `<img src="${store.image_url}" alt="${store.name}" class="w-full h-32 object-cover">` : ''}
+                    <div class="p-4">
+                        <div class="flex justify-between items-start mb-2">
+                            <div class="flex items-center gap-2">
+                                <button onclick="toggleFavorite('${storeId}')" class="text-lg focus:outline-none transition transform active:scale-125" title="お気に入り">
+                                    ${isFav ? '⭐' : '☆'}
+                                </button>
+                                <h3 class="font-bold text-gray-800 text-base">${store.name}</h3>
+                            </div>
+                            ${isUsed ? `<span class="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded font-bold shrink-0">利用済み</span>` : `<span class="text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded font-bold shrink-0">利用可能</span>`}
+                        </div>
+                        <div class="text-xs text-gray-500 space-y-1 mb-3">
+                            <div class="flex justify-between items-center">
+                                <span>📍 ${store.address || '住所未登録'} ${store.distance !== undefined ? `<strong class="text-amber-700 ml-1">(${store.distance.toFixed(1)}km)</strong>` : ''}</span>
+                                <a href="${mapUrl}" target="_blank" rel="noopener noreferrer" class="text-blue-600 font-bold underline shrink-0 ml-2">🗺️ マップ</a>
+                            </div>
+                            ${store.tel ? `<p>📞 <a href="tel:${store.tel}" class="underline text-blue-600">${store.tel}</a></p>` : ''}
+                            <p>🕒 ${store.hours || '営業時間未登録'}</p>
+                            ${store.url ? `<p>🔗 <a href="${store.url}" target="_blank" rel="noopener noreferrer" class="text-blue-600 underline truncate block">公式Web / SNSを開く</a></p>` : ''}
+                        </div>
+                        <div class="bg-amber-50 p-2.5 rounded-lg text-xs text-amber-900 mb-3 border border-amber-100">
+                            🎁 <strong>特典:</strong> ${store.benefit}
+                        </div>
+                        ${isUsed 
+                            ? `<button disabled class="w-full bg-gray-200 text-gray-400 font-bold py-2 rounded-lg text-sm cursor-not-allowed">利用済みです</button>`
+                            : `<button onclick="promptPinAndUse('${currentCode}', '${storeId}', '${store.name}', '${store.pin || '1234'}')" class="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-2 rounded-lg text-sm shadow transition">特典を利用する（店頭でタップ）</button>`
+                        }
+                    </div>
+                `;
+                storeListEl.appendChild(card);
+            });
+        }
+
+        window.toggleFavorite = async function(storeId) {
+            const favorites = currentPassData.favorites || [];
+            const isFav = favorites.includes(storeId);
+
+            try {
+                const docRef = doc(db, "codes", currentCode);
+                if (isFav) {
+                    await updateDoc(docRef, { favorites: arrayRemove(storeId) });
+                    currentPassData.favorites = favorites.filter(id => id !== storeId);
+                } else {
+                    await updateDoc(docRef, { favorites: arrayUnion(storeId) });
+                    if (!currentPassData.favorites) currentPassData.favorites = [];
+                    currentPassData.favorites.push(storeId);
+                }
+                applyFilterAndRender();
+            } catch (error) {
+                console.error("Error updating favorites:", error);
+                alert('お気に入りの更新に失敗しました。');
+            }
+        };
+
+        window.switchStoreFilter = function(filterType) {
+            currentFilter = filterType;
+            const btnAll = document.getElementById('filter-btn-all');
+            const btnFav = document.getElementById('filter-btn-fav');
+
+            if (filterType === 'all') {
+                btnAll.className = "flex-1 py-1.5 text-xs font-bold rounded-md bg-white shadow-sm text-amber-900 transition";
+                btnFav.className = "flex-1 py-1.5 text-xs font-bold rounded-md text-gray-600 transition";
+            } else {
+                btnFav.className = "flex-1 py-1.5 text-xs font-bold rounded-md bg-white shadow-sm text-amber-900 transition";
+                btnAll.className = "flex-1 py-1.5 text-xs font-bold rounded-md text-gray-600 transition";
+            }
+            applyFilterAndRender();
+        };
+
+        function renderHistoryList() {
+            const usedStores = currentPassData.used_stores || [];
             const historyListEl = document.getElementById('history-list');
             historyListEl.innerHTML = '';
 
             if (usedStores.length === 0) {
                 historyListEl.innerHTML = `<p class="text-xs text-gray-400 text-center py-4">まだ利用した店舗はありません。</p>`;
+                return;
             }
 
-            storesSnapshot.forEach((storeDoc) => {
-                const store = storeDoc.data();
-                const storeId = storeDoc.id;
-                const isUsed = usedStores.includes(storeId);
-
-                const card = document.createElement('div');
-                card.className = `bg-white rounded-xl p-4 shadow-sm border ${isUsed ? 'border-gray-200 opacity-75' : 'border-amber-100'}`;
-                card.innerHTML = `
-                    <div class="flex justify-between items-start mb-2">
-                        <h3 class="font-bold text-gray-800">${store.name}</h3>
-                        ${isUsed ? `<span class="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded font-bold">利用済み</span>` : `<span class="text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded font-bold">利用可能</span>`}
-                    </div>
-                    <p class="text-xs text-gray-500 mb-2">📍 ${store.address} / 🕒 ${store.hours}</p>
-                    <div class="bg-amber-50 p-2.5 rounded-lg text-xs text-amber-900 mb-3">
-                        🎁 <strong>特典:</strong> ${store.benefit}
-                    </div>
-                    ${isUsed 
-                        ? `<button disabled class="w-full bg-gray-200 text-gray-400 font-bold py-2 rounded-lg text-sm cursor-not-allowed">利用済みです</button>`
-                        : `<button onclick="useStoreCoupon('${currentCode}', '${storeId}', '${store.name}')" class="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-2 rounded-lg text-sm shadow transition">特典を利用する</button>`
-                    }
-                `;
-                storeListEl.appendChild(card);
-
-                if (isUsed) {
+            allStores.forEach((store) => {
+                if (usedStores.includes(store.id)) {
                     const historyItem = document.createElement('div');
-                    historyItem.className = 'flex justify-between items-center bg-gray-50 p-2.5 rounded-lg text-xs';
+                    historyItem.className = 'flex justify-between items-center bg-gray-50 p-3 rounded-lg text-xs border';
                     historyItem.innerHTML = `
-                        <div class="font-bold text-gray-800">${store.name}</div>
-                        <span class="text-green-600 font-bold">✓ 利用済み</span>
+                        <div>
+                            <div class="font-bold text-gray-800">${store.name}</div>
+                            <div class="text-[10px] text-gray-400">🎁 ${store.benefit}</div>
+                        </div>
+                        <span class="text-green-600 font-bold shrink-0">✓ 利用済み</span>
                     `;
                     historyListEl.appendChild(historyItem);
                 }
             });
         }
 
-        // クーポン利用（消込）
-        window.useStoreCoupon = async function(code, storeId, storeName) {
-            if (confirm(`【${storeName}】の特典を利用しますか？`)) {
+        window.sortByDistance = function() {
+            if (!navigator.geolocation) {
+                alert('お使いのブラウザは位置情報サービスに対応していません。');
+                return;
+            }
+
+            alert('現在地を取得します...');
+            navigator.geolocation.getCurrentPosition((pos) => {
+                const userLat = pos.coords.latitude;
+                const userLng = pos.coords.longitude;
+
+                allStores.forEach(store => {
+                    if (store.lat && store.lng) {
+                        store.distance = calculateDistance(userLat, userLng, parseFloat(store.lat), parseFloat(store.lng));
+                    } else {
+                        store.distance = 9999;
+                    }
+                });
+
+                allStores.sort((a, b) => a.distance - b.distance);
+                applyFilterAndRender();
+                alert('現在地から近い順に並び替えました！');
+            }, (err) => {
+                alert('位置情報の取得に失敗しました。設定をご確認ください。');
+            });
+        };
+
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371;
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                      Math.sin(dLon/2) * Math.sin(dLon/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            return R * c;
+        }
+
+        window.promptPinAndUse = async function(code, storeId, storeName, correctPin) {
+            const inputPin = prompt(`【${storeName}】\n店員さんに4桁の暗証番号を聞いて入力してください:`);
+            if (inputPin === null) return;
+
+            if (inputPin.trim() === correctPin.trim()) {
                 try {
                     const docRef = doc(db, "codes", code);
                     await updateDoc(docRef, {
                         used_stores: arrayUnion(storeId)
                     });
-                    alert(`${storeName}の特典を利用済みにしました！`);
-                    // 再読み込み時にもスキャン画面に戻すため再読込
-                    window.location.href = window.location.pathname;
+                    alert(`🎉 ${storeName}の特典を利用済みにしました！`);
+                    window.location.reload();
                 } catch (error) {
                     console.error("Error updating coupon:", error);
                     alert('処理に失敗しました。');
                 }
+            } else {
+                alert('❌ 暗証番号（PIN）が違います。店員さんにご確認ください。');
             }
         };
 
-        // QRコードスキャナの開始
         window.startScanner = function() {
             document.getElementById('scanner-container').classList.remove('hidden');
             html5QrCode = new Html5Qrcode("reader");
@@ -140,45 +301,53 @@
                 { facingMode: "environment" },
                 { fps: 10, qrbox: { width: 220, height: 220 } },
                 async (decodedText) => {
-                    // スキャン成功時
                     await stopScanner();
-                    
-                    // URL形式で読み取られた場合、?code= パラメータを取り出す処理
                     let extractedCode = decodedText;
                     try {
                         const url = new URL(decodedText);
                         const codeParam = url.searchParams.get("code");
                         if (codeParam) extractedCode = codeParam;
-                    } catch (e) {
-                        // URLではないテキストそのままの場合は何もしない
-                    }
-
+                    } catch (e) {}
                     checkAndInitPass(extractedCode);
                 },
-                (errorMessage) => {
-                    // スキャン中の読み取りエラー（読み取り継続中）
-                }
+                (errorMessage) => {}
             ).catch((err) => {
-                console.error("Camera start error:", err);
-                alert("カメラの起動に失敗しました。アクセス許可を確認してください。");
+                alert("カメラの起動に失敗しました。");
                 document.getElementById('scanner-container').classList.add('hidden');
             });
         };
 
-        // QRコードスキャナの停止
         window.stopScanner = async function() {
             if (html5QrCode) {
                 try {
                     await html5QrCode.stop();
                     html5QrCode = null;
-                } catch (err) {
-                    console.error("Failed to stop scanner:", err);
-                }
+                } catch (err) {}
             }
             document.getElementById('scanner-container').classList.add('hidden');
         };
 
-        // エラー（NG）メッセージ用ダイアログ表示
+        window.submitManualCode = function() {
+            const codeInput = document.getElementById('manual-code-input');
+            const code = codeInput.value.trim();
+            if (!code) {
+                alert('シリアルコードを入力してください。');
+                return;
+            }
+            checkAndInitPass(code);
+        };
+
+        // 🚪 ログオフ処理（記憶を解除して初期スキャン画面に戻る）
+        window.logout = function() {
+            if (confirm('パスポートの認証を解除（ログオフ）しますか？\n※再度利用する場合はQRコードの読み取りが必要になります。')) {
+                localStorage.removeItem('ono_active_code');
+                currentCode = null;
+                currentPassData = null;
+                // URLからパラメータを取り除いてリロード
+                window.location.href = window.location.pathname;
+            }
+        };
+
         function showErrorModal(message) {
             document.getElementById('error-message').innerText = message;
             document.getElementById('error-modal').classList.remove('hidden');
@@ -188,7 +357,6 @@
             document.getElementById('error-modal').classList.add('hidden');
         }
 
-        // テスト用アクティベート（動作テスト用に自動生成＋DB登録機能）
         window.testActivate = async function() {
             const randomCode = 'bag-' + Math.random().toString(36).substring(2, 8);
             const now = new Date();
@@ -199,7 +367,8 @@
                 code: randomCode,
                 activated_at: Timestamp.fromDate(now),
                 expires_at: Timestamp.fromDate(expires),
-                used_stores: []
+                used_stores: [],
+                favorites: []
             };
 
             showView('loading-view');
@@ -207,7 +376,6 @@
                 await setDoc(doc(db, "codes", randomCode), initialData);
                 checkAndInitPass(randomCode);
             } catch (err) {
-                console.error("Error creating test code:", err);
                 alert("テスト用コードの作成に失敗しました。");
                 showView('not-activated-view');
             }
@@ -215,38 +383,53 @@
 
         function showView(viewId) {
             ['not-activated-view', 'loading-view', 'activated-view'].forEach(id => {
-                document.getElementById(id).classList.add('hidden');
+                const el = document.getElementById(id);
+                if (el) {
+                    if (id === viewId) {
+                        el.classList.remove('hidden');
+                    } else {
+                        el.classList.add('hidden');
+                    }
+                }
             });
-            document.getElementById(viewId).classList.remove('hidden');
         }
     </script>
 </head>
 <body class="bg-amber-50 text-gray-800 font-sans min-h-screen flex flex-col">
 
-    <header class="bg-amber-800 text-white p-4 shadow-md text-center">
+    <header class="bg-amber-800 text-white p-4 shadow-md text-center relative">
         <h1 class="text-xl font-bold">☕ 小野めぐり珈琲バッグ</h1>
-        <p class="text-xs text-amber-200 mt-1">デジタルパスポート（DB連携版）</p>
+        <p class="text-xs text-amber-200 mt-1">デジタルパスポート（完全版）</p>
     </header>
 
     <main class="flex-1 max-w-md w-full mx-auto p-4 pb-20">
 
-        <!-- 未有効化（読み取り初期画面） -->
-        <section id="not-activated-view" class="bg-white rounded-xl p-6 shadow-sm text-center mt-6 hidden">
-            <h2 class="text-lg font-bold text-gray-800 mb-2">QRコードを読み込んでください</h2>
-            <p class="text-sm text-gray-600 mb-4">珈琲バッグのQRコードを読み取って認証します。</p>
+        <!-- 未有効化 -->
+        <section id="not-activated-view" class="bg-white rounded-xl p-6 shadow-sm text-center mt-6">
+            <h2 class="text-lg font-bold text-gray-800 mb-2">パスポートの認証</h2>
+            <p class="text-sm text-gray-600 mb-4">QRコードを読み取るか、コードを直接入力してください。</p>
             
-            <button onclick="startScanner()" class="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 px-4 rounded-lg shadow transition mb-3">
-                📷 QRコードを読み取る
+            <button onclick="startScanner()" class="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 px-4 rounded-lg shadow transition mb-4 flex items-center justify-center gap-2">
+                <span>📷</span> QRコードを読み取る
             </button>
+
+            <!-- 手入力フォーム -->
+            <div class="border-t border-gray-100 pt-4 mb-4 text-left">
+                <label class="block text-xs font-bold text-gray-600 mb-1">シリアルコードを直接入力</label>
+                <div class="flex gap-2">
+                    <input type="text" id="manual-code-input" placeholder="例: ONO-0001" class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-amber-600 uppercase">
+                    <button onclick="submitManualCode()" class="bg-amber-800 hover:bg-amber-900 text-white font-bold px-4 py-2 rounded-lg text-xs transition shrink-0">認証する</button>
+                </div>
+            </div>
 
             <button onclick="testActivate()" class="w-full bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold py-2 px-4 rounded-lg text-xs transition">
                 【テスト】新規コードを作成してDB登録＆読み込み
             </button>
         </section>
 
-        <!-- QRスキャナー表示エリア（モーダル overlay） -->
+        <!-- QRスキャナー -->
         <div id="scanner-container" class="fixed inset-0 bg-black/80 z-50 flex flex-col items-center justify-center p-4 hidden">
-            <div class="bg-white rounded-xl p-4 w-full max-w-xs text-center">
+            <div class="bg-white rounded-xl p-4 w-full max-w-xs text-center shadow-2xl">
                 <h3 class="font-bold text-gray-800 mb-2 text-sm">QRコードを枠内にかざしてください</h3>
                 <div id="reader" class="overflow-hidden rounded-lg"></div>
                 <button onclick="stopScanner()" class="mt-4 w-full bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 rounded-lg text-xs">
@@ -255,7 +438,7 @@
             </div>
         </div>
 
-        <!-- エラー（NG）メッセージ表示モーダル -->
+        <!-- エラーモーダル -->
         <div id="error-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 hidden">
             <div class="bg-white rounded-xl p-6 w-full max-w-xs text-center shadow-lg border-2 border-red-500">
                 <div class="text-red-500 font-bold text-4xl mb-2">✕ NG</div>
@@ -269,30 +452,54 @@
 
         <!-- ローディング -->
         <section id="loading-view" class="text-center py-20 hidden">
-            <p class="text-amber-800 font-bold">データを読み込んでいます...</p>
+            <p class="text-amber-800 font-bold animate-pulse">データを読み込んでいます...</p>
         </section>
 
         <!-- 有効化済み -->
         <section id="activated-view" class="hidden">
-            <div class="bg-white rounded-xl p-4 shadow-sm mb-4 border-l-4 border-amber-600">
-                <div class="flex justify-between items-center mb-1">
-                    <span class="text-xs font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded">クラウド同期中</span>
-                    <span id="expire-date" class="text-xs text-gray-500"></span>
+            <!-- 認証ステータスカード ＋ ログオフボタン -->
+            <div class="bg-white rounded-xl p-4 shadow-sm mb-3 border-l-4 border-amber-600 flex justify-between items-start">
+                <div>
+                    <div class="flex items-center gap-2 mb-1">
+                        <span class="text-xs font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded">パスポート認証済み</span>
+                        <span id="display-active-code" class="text-xs font-mono font-bold text-gray-600"></span>
+                    </div>
+                    <div id="expire-date" class="text-xs text-gray-500"></div>
                 </div>
-                <div class="text-sm font-medium text-gray-700">状態: <span class="text-green-600 font-bold">全店舗利用可能（各1回）</span></div>
+                <button onclick="logout()" class="text-xs text-gray-400 hover:text-red-600 underline font-bold transition shrink-0 ml-2">
+                    🚪 ログオフ
+                </button>
             </div>
 
-            <div class="flex bg-amber-200 rounded-lg p-1 mb-4">
-                <button onclick="document.getElementById('tab-stores').classList.remove('hidden'); document.getElementById('tab-history').classList.add('hidden');" class="flex-1 py-2 text-sm font-bold rounded-md bg-white shadow-sm">参加店舗一覧</button>
-                <button onclick="document.getElementById('tab-stores').classList.add('hidden'); document.getElementById('tab-history').classList.remove('hidden');" class="flex-1 py-2 text-sm font-bold rounded-md">利用履歴</button>
+            <!-- GPS並び替えボタン -->
+            <button onclick="sortByDistance()" class="w-full bg-white border border-amber-600 text-amber-800 font-bold py-2 px-3 rounded-lg text-xs shadow-sm mb-3 flex items-center justify-center gap-1 hover:bg-amber-50 transition">
+                📍 現在地から近い順に並び替える
+            </button>
+
+            <!-- タブ切り替え -->
+            <div class="flex bg-amber-200/60 rounded-lg p-1 mb-3">
+                <button id="btn-tab-stores" onclick="document.getElementById('tab-stores').classList.remove('hidden'); document.getElementById('tab-history').classList.add('hidden'); this.classList.add('bg-white','shadow-sm'); document.getElementById('btn-tab-history').classList.remove('bg-white','shadow-sm');" class="flex-1 py-2 text-sm font-bold rounded-md bg-white shadow-sm transition">参加店舗一覧</button>
+                <button id="btn-tab-history" onclick="document.getElementById('tab-stores').classList.add('hidden'); document.getElementById('tab-history').classList.remove('hidden'); this.classList.add('bg-white','shadow-sm'); document.getElementById('btn-tab-stores').classList.remove('bg-white','shadow-sm');" class="flex-1 py-2 text-sm font-bold rounded-md transition">利用履歴</button>
             </div>
 
+            <!-- 店舗一覧タブ -->
             <div id="tab-stores" class="space-y-3">
+                <div class="relative">
+                    <input type="text" id="store-search-input" oninput="applyFilterAndRender()" placeholder="🔍 店舗名・住所・特典で検索..." class="w-full bg-white border border-amber-200 rounded-xl py-2.5 px-4 pl-10 text-xs shadow-sm focus:outline-none focus:ring-2 focus:ring-amber-600">
+                    <span class="absolute left-3 top-2.5 text-gray-400 text-sm">🔍</span>
+                </div>
+
+                <div class="flex bg-amber-100 rounded-lg p-1">
+                    <button id="filter-btn-all" onclick="switchStoreFilter('all')" class="flex-1 py-1.5 text-xs font-bold rounded-md bg-white shadow-sm text-amber-900 transition">すべての店舗</button>
+                    <button id="filter-btn-fav" onclick="switchStoreFilter('favorites')" class="flex-1 py-1.5 text-xs font-bold rounded-md text-gray-600 transition">⭐ お気に入りのみ</button>
+                </div>
+
                 <div id="store-list" class="space-y-3"></div>
             </div>
 
+            <!-- 利用履歴タブ -->
             <div id="tab-history" class="hidden space-y-3">
-                <div class="bg-white rounded-xl p-4 shadow-sm">
+                <div class="bg-white rounded-xl p-4 shadow-sm border border-amber-100">
                     <h3 class="font-bold text-sm text-gray-700 mb-3 border-b pb-2">これまでに利用したお店</h3>
                     <div id="history-list" class="space-y-2"></div>
                 </div>
