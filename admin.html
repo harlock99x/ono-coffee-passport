@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>小野めぐり珈琲バッグ 管理者画面</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Firebase SDK (v9 Modular) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getFirestore, doc, setDoc, collection, getDocs, deleteDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAcLiObsI5p_dpGfpERStBHx2J322sO95U",
+  authDomain: "ono-coffee-passport.firebaseapp.com",
+  projectId: "ono-coffee-passport",
+  storageBucket: "ono-coffee-passport.firebasestorage.app",
+  messagingSenderId: "537440513359",
+  appId: "1:537440513359:web:973793d14ff9b6e382693a",
+  measurementId: "G-585ENGFG8G"
+};
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        // 認証判定
+        window.checkPassword = function() {
+            const input = document.getElementById('pass-input').value;
+            if (input === 'nekoaso') {
+                document.getElementById('login-view').classList.add('hidden');
+                document.getElementById('admin-dashboard').classList.remove('hidden');
+                loadStores();
+            } else {
+                alert('パスワードが違います');
+            }
+        };
+
+        // 店舗一覧の取得
+        async function loadStores() {
+            const querySnapshot = await getDocs(collection(db, "stores"));
+            const listEl = document.getElementById('admin-store-list');
+            listEl.innerHTML = '';
+
+            querySnapshot.forEach((docSnap) => {
+                const store = docSnap.data();
+                const id = docSnap.id;
+                const item = document.createElement('div');
+                item.className = 'flex justify-between items-center bg-gray-50 p-3 rounded-lg border text-sm';
+                item.innerHTML = `
+                    <div>
+                        <div class="font-bold text-gray-800">${store.name} (${id})</div>
+                        <div class="text-xs text-gray-500">📍 ${store.address} | 🎁 ${store.benefit}</div>
+                    </div>
+                    <button onclick="deleteStore('${id}')" class="text-xs bg-red-100 text-red-600 font-bold px-2.5 py-1.5 rounded hover:bg-red-200">削除</button>
+                `;
+                listEl.appendChild(item);
+            });
+        }
+
+        // 店舗の追加
+        window.addStore = async function() {
+            const id = document.getElementById('store-id').value.trim();
+            const name = document.getElementById('store-name').value.trim();
+            const address = document.getElementById('store-address').value.trim();
+            const hours = document.getElementById('store-hours').value.trim();
+            const benefit = document.getElementById('store-benefit').value.trim();
+
+            if (!id || !name || !benefit) {
+                alert('ID、店舗名、特典内容は必須です');
+                return;
+            }
+
+            try {
+                await setDoc(doc(db, "stores", id), {
+                    name: name,
+                    address: address,
+                    hours: hours,
+                    benefit: benefit
+                });
+                alert(`店舗「${name}」を追加・更新しました！`);
+                // フォーム初期化
+                document.getElementById('store-id').value = '';
+                document.getElementById('store-name').value = '';
+                document.getElementById('store-address').value = '';
+                document.getElementById('store-hours').value = '';
+                document.getElementById('store-benefit').value = '';
+                loadStores();
+            } catch (error) {
+                console.error("Error adding store:", error);
+                alert('追加に失敗しました');
+            }
+        };
+
+        // 店舗の削除
+        window.deleteStore = async function(id) {
+            if (confirm(`店舗 ID: ${id} を削除しますか？`)) {
+                await deleteDoc(doc(db, "stores", id));
+                loadStores();
+            }
+        };
+
+        // シリアルコードの事前発行・登録
+        window.generateCodes = async function() {
+            const prefix = document.getElementById('code-prefix').value.trim() || 'ONO';
+            const count = parseInt(document.getElementById('code-count').value, 10);
+
+            if (!count || count <= 0) {
+                alert('正しく枚数を指定してください');
+                return;
+            }
+
+            if (confirm(`${prefix}-001 から ${count}個のコードを登録しますか？`)) {
+                try {
+                    for (let i = 1; i <= count; i++) {
+                        const numStr = String(i).padStart(4, '0');
+                        const code = `${prefix}-${numStr}`;
+                        await setDoc(doc(db, "codes", code), {
+                            code: code,
+                            activated: false,
+                            activated_at: null,
+                            expires_at: null,
+                            used_stores: []
+                        }, { merge: true });
+                    }
+                    alert(`${count}件のコード発行・登録が完了しました！`);
+                } catch (error) {
+                    console.error("Error generating codes:", error);
+                    alert('コード発行に失敗しました');
+                }
+            }
+        };
+    </script>
+</head>
+<body class="bg-gray-100 text-gray-800 font-sans min-h-screen">
+
+    <!-- ヘッダー -->
+    <header class="bg-gray-800 text-white p-4 text-center font-bold shadow">
+        ⚙️ 小野めぐり珈琲バッグ 管理者ページ
+    </header>
+
+    <main class="max-w-lg mx-auto p-4">
+
+        <!-- ログイン画面 -->
+        <section id="login-view" class="bg-white p-6 rounded-xl shadow-md mt-10">
+            <h2 class="font-bold text-center text-lg mb-4 text-gray-700">管理者ログイン</h2>
+            <div class="bg-amber-50 border-l-4 border-amber-500 p-3 mb-4 text-xs text-amber-800">
+                💡 <strong>ヒント:</strong> 製作者のyoutubeサイトは？？
+            </div>
+            <div class="space-y-4">
+                <input type="password" id="pass-input" placeholder="パスワードを入力" class="w-full border p-3 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-600">
+                <button onclick="checkPassword()" class="w-full bg-amber-800 text-white font-bold py-3 rounded-lg shadow hover:bg-amber-900 transition">ログイン</button>
+            </div>
+        </section>
+
+        <!-- 管理ダッシュボード -->
+        <section id="admin-dashboard" class="hidden space-y-6">
+
+            <!-- 1. 新規店舗追加フォーム -->
+            <div class="bg-white p-5 rounded-xl shadow-sm border">
+                <h3 class="font-bold text-gray-800 border-b pb-2 mb-4">＋ 参加店舗の追加・編集</h3>
+                <div class="space-y-3 text-sm">
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">店舗ID (英数字・重複不可)</label>
+                        <input type="text" id="store-id" placeholder="例: store_01" class="w-full border p-2 rounded">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">店舗名</label>
+                        <input type="text" id="store-name" placeholder="例: 小野珈琲 ロースターズ" class="w-full border p-2 rounded">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">住所</label>
+                        <input type="text" id="store-address" placeholder="例: 小野市本町1-2" class="w-full border p-2 rounded">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">営業時間・定休日</label>
+                        <input type="text" id="store-hours" placeholder="例: 9:00 - 18:00 (水曜定休)" class="w-full border p-2 rounded">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">提供特典</label>
+                        <textarea id="store-benefit" placeholder="例: お会計から100円引き" class="w-full border p-2 rounded h-20"></textarea>
+                    </div>
+                    <button onclick="addStore()" class="w-full bg-green-600 text-white font-bold py-2.5 rounded hover:bg-green-700 transition">店舗をデータベースに保存</button>
+                </div>
+            </div>
+
+            <!-- 2. シリアルコード発行機能 -->
+            <div class="bg-white p-5 rounded-xl shadow-sm border">
+                <h3 class="font-bold text-gray-800 border-b pb-2 mb-4">🎫 本番用シリアルコード事前発行</h3>
+                <div class="space-y-3 text-sm">
+                    <div class="flex gap-2">
+                        <div class="flex-1">
+                            <label class="block text-xs text-gray-500 mb-1">接頭辞 (プレフィックス)</label>
+                            <input type="text" id="code-prefix" value="ONO" class="w-full border p-2 rounded">
+                        </div>
+                        <div class="flex-1">
+                            <label class="block text-xs text-gray-500 mb-1">発行枚数</label>
+                            <input type="number" id="code-count" value="10" class="w-full border p-2 rounded">
+                        </div>
+                    </div>
+                    <p class="text-xs text-gray-400">※「ONO-0001」のように事前に有効なコードを一括作成します。</p>
+                    <button onclick="generateCodes()" class="w-full bg-blue-600 text-white font-bold py-2.5 rounded hover:bg-blue-700 transition">シリアルコードを一括生成・登録</button>
+                </div>
+            </div>
+
+            <!-- 3. 登録済み店舗一覧 -->
+            <div class="bg-white p-5 rounded-xl shadow-sm border">
+                <h3 class="font-bold text-gray-800 border-b pb-2 mb-4">🏪 登録済み店舗一覧</h3>
+                <div id="admin-store-list" class="space-y-2">
+                    <p class="text-xs text-gray-400 text-center py-2">読み込み中...</p>
+                </div>
+            </div>
+
+        </section>
+
+    </main>
+
+</body>
+</html>
