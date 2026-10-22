@@ -6,35 +6,34 @@
     <title>小野めぐり珈琲バッグ デジタルパスポート（DB連携版）</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- HTML5 QR Code Scanner Library -->
+    <script src="https://unpkg.com/html5-qrcode"></script>
     <!-- Firebase SDK (v9 Modular) -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { getFirestore, doc, getDoc, setDoc, updateDoc, collection, getDocs, arrayUnion, Timestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
-const firebaseConfig = {
-  apiKey: "AIzaSyAcLiObsI5p_dpGfpERStBHx2J322sO95U",
-  authDomain: "ono-coffee-passport.firebaseapp.com",
-  projectId: "ono-coffee-passport",
-  storageBucket: "ono-coffee-passport.firebasestorage.app",
-  messagingSenderId: "537440513359",
-  appId: "1:537440513359:web:973793d14ff9b6e382693a",
-  measurementId: "G-585ENGFG8G"
-};
+        const firebaseConfig = {
+          apiKey: "AIzaSyAcLiObsI5p_dpGfpERStBHx2J322sO95U",
+          authDomain: "ono-coffee-passport.firebaseapp.com",
+          projectId: "ono-coffee-passport",
+          storageBucket: "ono-coffee-passport.firebasestorage.app",
+          messagingSenderId: "537440513359",
+          appId: "1:537440513359:web:973793d14ff9b6e382693a",
+          measurementId: "G-585ENGFG8G"
+        };
 
         // Firebase初期化
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
         // 現在のセッションコード
-        let currentCode = new URLSearchParams(window.location.search).get('code') || localStorage.getItem('active_bag_code');
+        let currentCode = null;
+        let html5QrCode = null;
 
-        window.addEventListener('DOMContentLoaded', async () => {
-            if (currentCode) {
-                localStorage.setItem('active_bag_code', currentCode);
-                await checkAndInitPass(currentCode); // スペル修正済み
-            } else {
-                showView('not-activated-view');
-            }
+        // ページ読み込み時は常に未スキャン状態を表示（スキップ防止）
+        window.addEventListener('DOMContentLoaded', () => {
+            showView('not-activated-view');
         });
 
         // パスポートの有効性確認 & 初期化
@@ -45,23 +44,13 @@ const firebaseConfig = {
                 const docSnap = await getDoc(docRef);
 
                 if (docSnap.exists()) {
+                    currentCode = code;
                     const data = docSnap.data();
                     renderDashboard(data);
                 } else {
-                    const now = new Date();
-                    const expires = new Date();
-                    expires.setMonth(expires.getMonth() + 3);
-
-                    const initialData = {
-                        code: code,
-                        activated_at: Timestamp.fromDate(now),
-                        expires_at: Timestamp.fromDate(expires),
-                        used_stores: []
-                    };
-
-                    await setDoc(docRef, initialData);
-                    alert('珈琲バッグのパスポートが有効化されました！');
-                    renderDashboard(initialData);
+                    // DBに登録が存在しない場合はNGを表示
+                    showErrorModal(`コード「${code}」は登録されていません。(NG)`);
+                    showView('not-activated-view');
                 }
             } catch (error) {
                 console.error("Error checking pass:", error);
@@ -74,7 +63,7 @@ const firebaseConfig = {
         async function renderDashboard(passData) {
             showView('activated-view');
             
-            const expireDate = passData.expires_at.toDate().toLocaleDateString();
+            const expireDate = passData.expires_at ? passData.expires_at.toDate().toLocaleDateString() : '未設定';
             document.getElementById('expire-date').innerText = `有効期限: ${expireDate} まで`;
 
             const storesSnapshot = await getDocs(collection(db, "stores"));
@@ -133,7 +122,8 @@ const firebaseConfig = {
                         used_stores: arrayUnion(storeId)
                     });
                     alert(`${storeName}の特典を利用済みにしました！`);
-                    window.location.reload();
+                    // 再読み込み時にもスキャン画面に戻すため再読込
+                    window.location.href = window.location.pathname;
                 } catch (error) {
                     console.error("Error updating coupon:", error);
                     alert('処理に失敗しました。');
@@ -141,10 +131,86 @@ const firebaseConfig = {
             }
         };
 
-        // テスト用アクティベート
-        window.testActivate = function() {
+        // QRコードスキャナの開始
+        window.startScanner = function() {
+            document.getElementById('scanner-container').classList.remove('hidden');
+            html5QrCode = new Html5Qrcode("reader");
+            
+            html5QrCode.start(
+                { facingMode: "environment" },
+                { fps: 10, qrbox: { width: 220, height: 220 } },
+                async (decodedText) => {
+                    // スキャン成功時
+                    await stopScanner();
+                    
+                    // URL形式で読み取られた場合、?code= パラメータを取り出す処理
+                    let extractedCode = decodedText;
+                    try {
+                        const url = new URL(decodedText);
+                        const codeParam = url.searchParams.get("code");
+                        if (codeParam) extractedCode = codeParam;
+                    } catch (e) {
+                        // URLではないテキストそのままの場合は何もしない
+                    }
+
+                    checkAndInitPass(extractedCode);
+                },
+                (errorMessage) => {
+                    // スキャン中の読み取りエラー（読み取り継続中）
+                }
+            ).catch((err) => {
+                console.error("Camera start error:", err);
+                alert("カメラの起動に失敗しました。アクセス許可を確認してください。");
+                document.getElementById('scanner-container').classList.add('hidden');
+            });
+        };
+
+        // QRコードスキャナの停止
+        window.stopScanner = async function() {
+            if (html5QrCode) {
+                try {
+                    await html5QrCode.stop();
+                    html5QrCode = null;
+                } catch (err) {
+                    console.error("Failed to stop scanner:", err);
+                }
+            }
+            document.getElementById('scanner-container').classList.add('hidden');
+        };
+
+        // エラー（NG）メッセージ用ダイアログ表示
+        function showErrorModal(message) {
+            document.getElementById('error-message').innerText = message;
+            document.getElementById('error-modal').classList.remove('hidden');
+        }
+
+        window.closeErrorModal = function() {
+            document.getElementById('error-modal').classList.add('hidden');
+        }
+
+        // テスト用アクティベート（動作テスト用に自動生成＋DB登録機能）
+        window.testActivate = async function() {
             const randomCode = 'bag-' + Math.random().toString(36).substring(2, 8);
-            window.location.href = `?code=${randomCode}`;
+            const now = new Date();
+            const expires = new Date();
+            expires.setMonth(expires.getMonth() + 3);
+
+            const initialData = {
+                code: randomCode,
+                activated_at: Timestamp.fromDate(now),
+                expires_at: Timestamp.fromDate(expires),
+                used_stores: []
+            };
+
+            showView('loading-view');
+            try {
+                await setDoc(doc(db, "codes", randomCode), initialData);
+                checkAndInitPass(randomCode);
+            } catch (err) {
+                console.error("Error creating test code:", err);
+                alert("テスト用コードの作成に失敗しました。");
+                showView('not-activated-view');
+            }
         };
 
         function showView(viewId) {
@@ -164,14 +230,42 @@ const firebaseConfig = {
 
     <main class="flex-1 max-w-md w-full mx-auto p-4 pb-20">
 
-        <!-- 未有効化 -->
+        <!-- 未有効化（読み取り初期画面） -->
         <section id="not-activated-view" class="bg-white rounded-xl p-6 shadow-sm text-center mt-6 hidden">
-            <h2 class="text-lg font-bold text-gray-800 mb-2">パスポートが未有効化です</h2>
-            <p class="text-sm text-gray-600 mb-4">珈琲バッグのQRコードを読み取るか、テストボタンを押してください。</p>
-            <button onclick="testActivate()" class="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 px-4 rounded-lg shadow transition">
-                【テスト】新規コードで有効化する
+            <h2 class="text-lg font-bold text-gray-800 mb-2">QRコードを読み込んでください</h2>
+            <p class="text-sm text-gray-600 mb-4">珈琲バッグのQRコードを読み取って認証します。</p>
+            
+            <button onclick="startScanner()" class="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 px-4 rounded-lg shadow transition mb-3">
+                📷 QRコードを読み取る
+            </button>
+
+            <button onclick="testActivate()" class="w-full bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold py-2 px-4 rounded-lg text-xs transition">
+                【テスト】新規コードを作成してDB登録＆読み込み
             </button>
         </section>
+
+        <!-- QRスキャナー表示エリア（モーダル overlay） -->
+        <div id="scanner-container" class="fixed inset-0 bg-black/80 z-50 flex flex-col items-center justify-center p-4 hidden">
+            <div class="bg-white rounded-xl p-4 w-full max-w-xs text-center">
+                <h3 class="font-bold text-gray-800 mb-2 text-sm">QRコードを枠内にかざしてください</h3>
+                <div id="reader" class="overflow-hidden rounded-lg"></div>
+                <button onclick="stopScanner()" class="mt-4 w-full bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 rounded-lg text-xs">
+                    キャンセル
+                </button>
+            </div>
+        </div>
+
+        <!-- エラー（NG）メッセージ表示モーダル -->
+        <div id="error-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 hidden">
+            <div class="bg-white rounded-xl p-6 w-full max-w-xs text-center shadow-lg border-2 border-red-500">
+                <div class="text-red-500 font-bold text-4xl mb-2">✕ NG</div>
+                <h3 class="font-bold text-gray-800 text-base mb-2">未登録のQRコードです</h3>
+                <p id="error-message" class="text-xs text-gray-600 mb-4 break-all"></p>
+                <button onclick="closeErrorModal()" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 rounded-lg text-xs">
+                    閉じる
+                </button>
+            </div>
+        </div>
 
         <!-- ローディング -->
         <section id="loading-view" class="text-center py-20 hidden">
