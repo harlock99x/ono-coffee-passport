@@ -3,236 +3,223 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>小野めぐり珈琲バッグ デジタルパスポート</title>
-    <!-- Tailwind CSS CDN -->
+    <title>小野めぐり珈琲バッグ デジタルパスポート（DB連携版）</title>
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-amber-50 text-gray-800 font-sans min-h-screen flex flex-col">
+    <!-- Firebase SDK (v9 Modular) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getFirestore, doc, getDoc, setDoc, updateDoc, collection, getDocs, arrayUnion, Timestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
-    <!-- ヘッダー -->
-    <header class="bg-amber-800 text-white p-4 shadow-md text-center">
-        <h1 class="text-xl font-bold">☕ 小野めぐり珈琲バッグ</h1>
-        <p class="text-xs text-amber-200 mt-1">デジタルパスポート（購入者限定）</p>
-    </header>
+const firebaseConfig = {
+  apiKey: "AIzaSyAcLiObsI5p_dpGfpERStBHx2J322sO95U",
+  authDomain: "ono-coffee-passport.firebaseapp.com",
+  projectId: "ono-coffee-passport",
+  storageBucket: "ono-coffee-passport.firebasestorage.app",
+  messagingSenderId: "537440513359",
+  appId: "1:537440513359:web:973793d14ff9b6e382693a",
+  measurementId: "G-585ENGFG8G"
+};
 
-    <!-- メインコンテンツ -->
-    <main class="flex-1 max-w-md w-full mx-auto p-4 pb-20">
+        // Firebase初期化
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
 
-        <!-- 未有効化の状態 -->
-        <section id="not-activated-view" class="bg-white rounded-xl p-6 shadow-sm text-center mt-6 hidden">
-            <h2 class="text-lg font-bold text-gray-800 mb-2">パスポートが未有効化です</h2>
-            <p class="text-sm text-gray-600 mb-4">珈琲バッグに同梱されているQRコードを読み取るか、下のボタンを押してパスポートを有効化してください。</p>
-            <button onclick="activatePassport('DEMO-CODE-123')" class="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 px-4 rounded-lg shadow transition">
-                【デモ】QRコードを読み込んで有効化する
-            </button>
-        </section>
+        // 現在のセッションコード（URLの ?code= から取得、なければ localStorage から取得）
+        let currentCode = new URLSearchParams(window.location.search).get('code') || localStorage.getItem('active_bag_code');
 
-        <!-- 有効化済みの状態 -->
-        <section id="activated-view" class="hidden">
-            
-            <!-- ステータスカード -->
-            <div class="bg-white rounded-xl p-4 shadow-sm mb-4 border-l-4 border-amber-600">
-                <div class="flex justify-between items-center mb-1">
-                    <span class="text-xs font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded">有効パスポート</span>
-                    <span id="expire-date" class="text-xs text-gray-500"></span>
-                </div>
-                <div class="text-sm font-medium text-gray-700">利用状態: <span class="text-green-600 font-bold">全店舗利用可能（各1回）</span></div>
-            </div>
-
-            <!-- タブ切り替えボタン -->
-            <div class="flex bg-amber-200 rounded-lg p-1 mb-4">
-                <button onclick="switchTab('stores')" id="tab-stores-btn" class="flex-1 py-2 text-sm font-bold rounded-md bg-white text-amber-900 shadow-sm transition">参加店舗一覧</button>
-                <button onclick="switchTab('history')" id="tab-history-btn" class="flex-1 py-2 text-sm font-bold rounded-md text-amber-900 transition">利用履歴・マイページ</button>
-            </div>
-
-            <!-- タブ1: 参加店舗一覧 -->
-            <div id="tab-stores" class="space-y-3">
-                <div id="store-list" class="space-y-3">
-                    <!-- JavaScriptで店舗一覧を動的生成 -->
-                </div>
-            </div>
-
-            <!-- タブ2: 利用履歴 -->
-            <div id="tab-history" class="hidden space-y-3">
-                <div class="bg-white rounded-xl p-4 shadow-sm">
-                    <h3 class="font-bold text-sm text-gray-700 mb-3 border-b pb-2">これまでに利用したお店</h3>
-                    <div id="history-list" class="space-y-2">
-                        <!-- 履歴がここに入る -->
-                    </div>
-                </div>
-                <div class="text-center mt-6">
-                    <button onclick="resetData()" class="text-xs text-red-500 underline hover:text-red-700">【デモ用】データをリセットして初期状態に戻す</button>
-                </div>
-            </div>
-
-        </section>
-
-    </main>
-
-    <!-- フッター -->
-    <footer class="bg-white border-t py-3 text-center text-xs text-gray-500">
-        &copy; 小野めぐり珈琲バッグ実行委員会
-    </footer>
-
-    <!-- スクリプト -->
-    <script>
-        // サンプル店舗データ
-        const stores = [
-            { id: 'store_1', name: '小野珈琲 ロースターズ', address: '小野市本町1-2', benefit: 'お会計から100円引き ＋ ドリップパック1個プレゼント', hours: '9:00 - 18:00 (水曜定休)' },
-            { id: 'store_2', name: 'カフェ・ド・ONO', address: '小野市中島2-5', benefit: 'ブレンドコーヒーおかわり1杯無料', hours: '10:00 - 19:00 (木曜定休)' },
-            { id: 'store_3', name: '喫茶 待夢（タイム）', address: '小野市大島3-1', benefit: '手作りクッキーをサービス', hours: '8:00 - 17:00 (無休)' },
-            { id: 'store_4', name: '豆の木珈琲店', address: '小野市王子町4-8', benefit: '珈琲豆をご購入の方に10%増量', hours: '11:00 - 18:00 (月曜定休)' },
-            { id: 'store_5', name: 'レトロ喫茶 ぽぷら', address: '小野市市場町5-3', benefit: '自家製プリンが50円引き', hours: '9:30 - 17:30 (火曜定休)' }
-        ];
-
-        // 初期化処理
-        window.onload = function() {
-            // URLパラメータ（?code=xxxx）がある場合のシミュレーション
-            const urlParams = new URLSearchParams(window.location.search);
-            const code = urlParams.get('code');
-            if (code) {
-                activatePassport(code);
-            }
-
-            checkState();
-        };
-
-        // 状態チェック
-        function checkState() {
-            const activatedAt = localStorage.getItem('ono_coffee_activated_at');
-            
-            if (activatedAt) {
-                document.getElementById('not-activated-view').classList.add('hidden');
-                document.getElementById('activated-view').classList.remove('hidden');
-                
-                // 有効期限計算（3ヶ月後）
-                const startDate = new Date(activatedAt);
-                const expireDate = new Date(startDate);
-                expireDate.setMonth(expireDate.getMonth() + 3);
-                
-                document.getElementById('expire-date').innerText = `有効期限: ${expireDate.toLocaleDateString()} まで`;
-                
-                renderStores();
-                renderHistory();
+        window.addEventListener('DOMContentLoaded', async () => {
+            if (currentCode) {
+                localStorage.setItem('active_bag_code', currentCode);
+                await checkAndInitPass(currentCode);
             } else {
-                document.getElementById('not-activated-view').classList.remove('hidden');
-                document.getElementById('activated-view').classList.add('hidden');
+                showView('not-activated-view');
+            }
+        });
+
+        // パスポートの有効性確認 & 初期化
+        async function checkAndInitPass(code) {
+            showView('loading-view');
+            try {
+                const docRef = doc(db, "codes", code);
+                const docSnap = await getDoc(docRef);
+
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    // すでに有効化されている場合
+                    renderDashboard(data);
+                } else {
+                    // 初回アクセス：DBに新規作成して有効化スタート！
+                    const now = new Date();
+                    const expires = new Date();
+                    expires.setMonth(expires.getMonth() + 3);
+
+                    const initialData = {
+                        code: code,
+                        activated_at: Timestamp.fromDate(now),
+                        expires_at: Timestamp.fromDate(expires),
+                        used_stores: []
+                    };
+
+                    await setDoc(docRef, initialData);
+                    alert('珈琲バッグのパスポートが有効化されました！3ヶ月間お楽しみください。');
+                    renderDashboard(initialData);
+                }
+            } catch (error) {
+                console.error("Error checking pass:", error);
+                alert('データの読み込みに失敗しました。通信環境をご確認ください。');
+                showView('not-activated-view');
             }
         }
 
-        // パスポート有効化
-        function activatePassport(code) {
-            if (!localStorage.getItem('ono_coffee_activated_at')) {
-                localStorage.setItem('ono_coffee_activated_at', new Date().toISOString());
-                localStorage.setItem('ono_coffee_history', JSON.stringify({}));
-                alert('パスポートが有効化されました！3ヶ月間お楽しみください。');
-                window.location.href = window.location.pathname; // パラメータクリア
+        // ダッシュボード描画
+        async function renderDashboard(passData) {
+            showView('activated-view');
+            
+            // 有効期限表示
+            const expireDate = passData.expires_at.toDate().toLocaleDateString();
+            document.getElementById('expire-date').innerText = `有効期限: ${expireDate} まで`;
+
+            // 店舗一覧の取得（Firestoreの stores コレクションから取得）
+            const storesSnapshot = await getDocs(collection(db, "stores"));
+            const storeListEl = document.getElementById('store-list');
+            storeListEl.innerHTML = '';
+
+            const usedStores = passData.used_stores || [];
+            const historyListEl = document.getElementById('history-list');
+            historyListEl.innerHTML = '';
+
+            if (usedStores.length === 0) {
+                historyListEl.innerHTML = `<p class="text-xs text-gray-400 text-center py-4">まだ利用した店舗はありません。</p>`;
             }
-        }
 
-        // 店舗一覧の描画
-        function renderStores() {
-            const history = JSON.parse(localStorage.getItem('ono_coffee_history') || '{}');
-            const container = document.getElementById('store-list');
-            container.innerHTML = '';
+            storesSnapshot.forEach((storeDoc) => {
+                const store = storeDoc.data();
+                const storeId = storeDoc.id;
+                const isUsed = usedStores.includes(storeId);
 
-            stores.forEach(store => {
-                const isUsed = history[store.id] !== undefined;
-                const usedDate = isUsed ? new Date(history[store.id]).toLocaleDateString() : '';
-
+                // 店舗カード作成
                 const card = document.createElement('div');
-                card.className = `bg-white rounded-xl p-4 shadow-sm border ${isUsed ? 'bg-gray-50 border-gray-200 opacity-75' : 'border-amber-100'}`;
-                
+                card.className = `bg-white rounded-xl p-4 shadow-sm border ${isUsed ? 'border-gray-200 opacity-75' : 'border-amber-100'}`;
                 card.innerHTML = `
                     <div class="flex justify-between items-start mb-2">
                         <h3 class="font-bold text-gray-800">${store.name}</h3>
-                        ${isUsed ? `<span class="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded font-bold">利用済み (${usedDate})</span>` : `<span class="text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded font-bold">利用可能</span>`}
+                        ${isUsed ? `<span class="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded font-bold">利用済み</span>` : `<span class="text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded font-bold">利用可能</span>`}
                     </div>
                     <p class="text-xs text-gray-500 mb-2">📍 ${store.address} / 🕒 ${store.hours}</p>
                     <div class="bg-amber-50 p-2.5 rounded-lg text-xs text-amber-900 mb-3">
                         🎁 <strong>特典:</strong> ${store.benefit}
                     </div>
                     ${isUsed 
-                        ? `<button disabled class="w-full bg-gray-200 text-gray-400 font-bold py-2 rounded-lg text-sm cursor-not-allowed">この店舗の特典は利用済みです</button>`
-                        : `<button onclick="useBenefit('${store.id}', '${store.name}')" class="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-2 rounded-lg text-sm shadow transition">特典を利用する（店員に提示）</button>`
+                        ? `<button disabled class="w-full bg-gray-200 text-gray-400 font-bold py-2 rounded-lg text-sm cursor-not-allowed">利用済みです</button>`
+                        : `<button onclick="useStoreCoupon('${currentCode}', '${storeId}', '${store.name}')" class="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-2 rounded-lg text-sm shadow transition">特典を利用する</button>`
                     }
                 `;
-                container.appendChild(card);
-            });
-        }
+                storeListEl.appendChild(card);
 
-        // 特典利用（消し込み）処理
-        function useBenefit(storeId, storeName) {
-            if (confirm(`【${storeName}】の特典を利用しますか？\n※一度利用すると再度使用できません。店員さんの前でタップしてください。`)) {
-                const history = JSON.parse(localStorage.getItem('ono_coffee_history') || '{}');
-                history[storeId] = new Date().toISOString();
-                localStorage.setItem('ono_coffee_history', JSON.stringify(history));
-                
-                alert(`${storeName}の特典を利用済みみにしました！`);
-                renderStores();
-                renderHistory();
-            }
-        }
-
-        // 履歴の描画
-        function renderHistory() {
-            const history = JSON.parse(localStorage.getItem('ono_coffee_history') || '{}');
-            const container = document.getElementById('history-list');
-            container.innerHTML = '';
-
-            const usedStoreIds = Object.keys(history);
-
-            if (usedStoreIds.length === 0) {
-                container.innerHTML = `<p class="text-xs text-gray-400 text-center py-4">まだ利用した店舗はありません。お店を巡って特典を使おう！</p>`;
-                return;
-            }
-
-            usedStoreIds.forEach(storeId => {
-                const store = stores.find(s => s.id === storeId);
-                const date = new Date(history[storeId]).toLocaleString();
-                if (store) {
-                    const item = document.createElement('div');
-                    item.className = 'flex justify-between items-center bg-gray-50 p-2.5 rounded-lg text-xs';
-                    item.innerHTML = `
-                        <div>
-                            <div class="font-bold text-gray-800">${store.name}</div>
-                            <div class="text-gray-500">${date} 利用</div>
-                        </div>
-                        <span class="text-green-600 font-bold">✓ 済</span>
+                // 利用済みなら履歴にも追加
+                if (isUsed) {
+                    const historyItem = document.createElement('div');
+                    historyItem.className = 'flex justify-between items-center bg-gray-50 p-2.5 rounded-lg text-xs';
+                    historyItem.innerHTML = `
+                        <div class="font-bold text-gray-800">${store.name}</div>
+                        <span class="text-green-600 font-bold">✓ 利用済み</span>
                     `;
-                    container.appendChild(item);
+                    historyListEl.appendChild(historyItem);
                 }
             });
         }
 
-        // タブ切り替え
-        function switchTab(tabName) {
-            const storesTab = document.getElementById('tab-stores');
-            const historyTab = document.getElementById('tab-history');
-            const storesBtn = document.getElementById('tab-stores-btn');
-            const historyBtn = document.getElementById('tab-history-btn');
-
-            if (tabName === 'stores') {
-                storesTab.classList.remove('hidden');
-                historyTab.classList.add('hidden');
-                storesBtn.classList.add('bg-white', 'shadow-sm');
-                historyBtn.classList.remove('bg-white', 'shadow-sm');
-            } else {
-                storesTab.classList.add('hidden');
-                historyTab.classList.remove('hidden');
-                historyBtn.classList.add('bg-white', 'shadow-sm');
-                storesBtn.classList.remove('bg-white', 'shadow-sm');
+        // クーポン利用（消込）をDBに保存
+        window.useStoreCoupon = async function(code, storeId, storeName) {
+            if (confirm(`【${storeName}】の特典を利用しますか？\n※店員さんの前でタップしてください。`)) {
+                try {
+                    const docRef = doc(db, "codes", code);
+                    await updateDoc(docRef, {
+                        used_stores: arrayUnion(storeId)
+                    });
+                    alert(`${storeName}の特典を利用済みにしました！`);
+                    // 再読み込みして画面を更新
+                    window.location.reload();
+                } catch (error) {
+                    console.error("Error updating coupon:", error);
+                    alert('処理に失敗しました。');
+                }
             }
-        }
+        };
 
-        // リセット
-        function resetData() {
-            if (confirm('デモデータをリセットして未有効化の状態に戻しますか？')) {
-                localStorage.removeItem('ono_coffee_activated_at');
-                localStorage.removeItem('ono_coffee_history');
-                checkState();
-            }
+        // デモ用のアクティベートボタン
+        window.testActivate = function() {
+            const randomCode = 'bag-' + Math.random().toString(36.substring(2, 8));
+            window.location.href = `?code=${randomCode}`;
+        };
+
+        function showView(viewId) {
+            ['not-activated-view', 'loading-view', 'activated-view'].forEach(id => {
+                document.getElementById(id).classList.add('hidden');
+            });
+            document.getElementById(viewId).classList.remove('hidden');
         }
     </script>
+</head>
+<body class="bg-amber-50 text-gray-800 font-sans min-h-screen flex flex-col">
+
+    <header class="bg-amber-800 text-white p-4 shadow-md text-center">
+        <h1 class="text-xl font-bold">☕ 小野めぐり珈琲バッグ</h1>
+        <p class="text-xs text-amber-200 mt-1">デジタルパスポート（DB連携版）</p>
+    </header>
+
+    <main class="flex-1 max-w-md w-full mx-auto p-4 pb-20">
+
+        <!-- 未有効化 -->
+        <section id="not-activated-view" class="bg-white rounded-xl p-6 shadow-sm text-center mt-6 hidden">
+            <h2 class="text-lg font-bold text-gray-800 mb-2">パスポートが未有効化です</h2>
+            <p class="text-sm text-gray-600 mb-4">珈琲バッグのQRコードを読み取るか、テストボタンを押してください。</p>
+            <button onclick="testActivate()" class="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 px-4 rounded-lg shadow transition">
+                【テスト】新規コードで有効化する
+            </button>
+        </section>
+
+        <!-- ローディング -->
+        <section id="loading-view" class="text-center py-20 hidden">
+            <p class="text-amber-800 font-bold">データを読み込んでいます...</p>
+        </section>
+
+        <!-- 有効化済み -->
+        <section id="activated-view" class="hidden">
+            <div class="bg-white rounded-xl p-4 shadow-sm mb-4 border-l-4 border-amber-600">
+                <div class="flex justify-between items-center mb-1">
+                    <span class="text-xs font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded">クラウド同期中</span>
+                    <span id="expire-date" class="text-xs text-gray-500"></span>
+                </div>
+                <div class="text-sm font-medium text-gray-700">状態: <span class="text-green-600 font-bold">全店舗利用可能（各1回）</span></div>
+            </div>
+
+            <!-- タブ切り替え -->
+            <div class="flex bg-amber-200 rounded-lg p-1 mb-4">
+                <button onclick="document.getElementById('tab-stores').classList.remove('hidden'); document.getElementById('tab-history').classList.add('hidden');" class="flex-1 py-2 text-sm font-bold rounded-md bg-white shadow-sm">参加店舗一覧</button>
+                <button onclick="document.getElementById('tab-stores').classList.add('hidden'); document.getElementById('tab-history').classList.remove('hidden');" class="flex-1 py-2 text-sm font-bold rounded-md">利用履歴</button>
+            </div>
+
+            <!-- 店舗一覧 -->
+            <div id="tab-stores" class="space-y-3">
+                <div id="store-list" class="space-y-3"></div>
+            </div>
+
+            <!-- 履歴 -->
+            <div id="tab-history" class="hidden space-y-3">
+                <div class="bg-white rounded-xl p-4 shadow-sm">
+                    <h3 class="font-bold text-sm text-gray-700 mb-3 border-b pb-2">これまでに利用したお店</h3>
+                    <div id="history-list" class="space-y-2"></div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <footer class="bg-white border-t py-3 text-center text-xs text-gray-500">
+        &copy; 小野めぐり珈琲バッグ実行委員会
+    </footer>
+
 </body>
 </html>
