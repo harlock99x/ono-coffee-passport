@@ -25,13 +25,13 @@ const firebaseConfig = {
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // 現在のセッションコード（URLの ?code= から取得、なければ localStorage から取得）
+        // 現在のセッションコード
         let currentCode = new URLSearchParams(window.location.search).get('code') || localStorage.getItem('active_bag_code');
 
         window.addEventListener('DOMContentLoaded', async () => {
             if (currentCode) {
                 localStorage.setItem('active_bag_code', currentCode);
-                await checkAndInitPass(currentCode);
+                await checkAndInitPass(currentCode); // スペル修正済み
             } else {
                 showView('not-activated-view');
             }
@@ -46,10 +46,8 @@ const firebaseConfig = {
 
                 if (docSnap.exists()) {
                     const data = docSnap.data();
-                    // すでに有効化されている場合
                     renderDashboard(data);
                 } else {
-                    // 初回アクセス：DBに新規作成して有効化スタート！
                     const now = new Date();
                     const expires = new Date();
                     expires.setMonth(expires.getMonth() + 3);
@@ -62,12 +60,12 @@ const firebaseConfig = {
                     };
 
                     await setDoc(docRef, initialData);
-                    alert('珈琲バッグのパスポートが有効化されました！3ヶ月間お楽しみください。');
+                    alert('珈琲バッグのパスポートが有効化されました！');
                     renderDashboard(initialData);
                 }
             } catch (error) {
                 console.error("Error checking pass:", error);
-                alert('データの読み込みに失敗しました。通信環境をご確認ください。');
+                alert('データの読み込みに失敗しました。');
                 showView('not-activated-view');
             }
         }
@@ -76,11 +74,9 @@ const firebaseConfig = {
         async function renderDashboard(passData) {
             showView('activated-view');
             
-            // 有効期限表示
             const expireDate = passData.expires_at.toDate().toLocaleDateString();
             document.getElementById('expire-date').innerText = `有効期限: ${expireDate} まで`;
 
-            // 店舗一覧の取得（Firestoreの stores コレクションから取得）
             const storesSnapshot = await getDocs(collection(db, "stores"));
             const storeListEl = document.getElementById('store-list');
             storeListEl.innerHTML = '';
@@ -98,7 +94,6 @@ const firebaseConfig = {
                 const storeId = storeDoc.id;
                 const isUsed = usedStores.includes(storeId);
 
-                // 店舗カード作成
                 const card = document.createElement('div');
                 card.className = `bg-white rounded-xl p-4 shadow-sm border ${isUsed ? 'border-gray-200 opacity-75' : 'border-amber-100'}`;
                 card.innerHTML = `
@@ -117,7 +112,6 @@ const firebaseConfig = {
                 `;
                 storeListEl.appendChild(card);
 
-                // 利用済みなら履歴にも追加
                 if (isUsed) {
                     const historyItem = document.createElement('div');
                     historyItem.className = 'flex justify-between items-center bg-gray-50 p-2.5 rounded-lg text-xs';
@@ -130,16 +124,15 @@ const firebaseConfig = {
             });
         }
 
-        // クーポン利用（消込）をDBに保存
+        // クーポン利用（消込）
         window.useStoreCoupon = async function(code, storeId, storeName) {
-            if (confirm(`【${storeName}】の特典を利用しますか？\n※店員さんの前でタップしてください。`)) {
+            if (confirm(`【${storeName}】の特典を利用しますか？`)) {
                 try {
                     const docRef = doc(db, "codes", code);
                     await updateDoc(docRef, {
                         used_stores: arrayUnion(storeId)
                     });
                     alert(`${storeName}の特典を利用済みにしました！`);
-                    // 再読み込みして画面を更新
                     window.location.reload();
                 } catch (error) {
                     console.error("Error updating coupon:", error);
@@ -148,9 +141,9 @@ const firebaseConfig = {
             }
         };
 
-        // デモ用のアクティベートボタン
+        // テスト用アクティベート
         window.testActivate = function() {
-            const randomCode = 'bag-' + Math.random().toString(36.substring(2, 8));
+            const randomCode = 'bag-' + Math.random().toString(36).substring(2, 8);
             window.location.href = `?code=${randomCode}`;
         };
 
@@ -195,18 +188,15 @@ const firebaseConfig = {
                 <div class="text-sm font-medium text-gray-700">状態: <span class="text-green-600 font-bold">全店舗利用可能（各1回）</span></div>
             </div>
 
-            <!-- タブ切り替え -->
             <div class="flex bg-amber-200 rounded-lg p-1 mb-4">
                 <button onclick="document.getElementById('tab-stores').classList.remove('hidden'); document.getElementById('tab-history').classList.add('hidden');" class="flex-1 py-2 text-sm font-bold rounded-md bg-white shadow-sm">参加店舗一覧</button>
                 <button onclick="document.getElementById('tab-stores').classList.add('hidden'); document.getElementById('tab-history').classList.remove('hidden');" class="flex-1 py-2 text-sm font-bold rounded-md">利用履歴</button>
             </div>
 
-            <!-- 店舗一覧 -->
             <div id="tab-stores" class="space-y-3">
                 <div id="store-list" class="space-y-3"></div>
             </div>
 
-            <!-- 履歴 -->
             <div id="tab-history" class="hidden space-y-3">
                 <div class="bg-white rounded-xl p-4 shadow-sm">
                     <h3 class="font-bold text-sm text-gray-700 mb-3 border-b pb-2">これまでに利用したお店</h3>
