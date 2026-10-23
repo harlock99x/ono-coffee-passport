@@ -73,6 +73,33 @@
                 if (docSnap.exists()) {
                     currentCode = code;
                     currentPassData = docSnap.data();
+
+                    const now = new Date();
+
+                    // 初回認証時（expires_atがまだ未設定の場合）、自動で「現在から3ヶ月」の期限を設定してDB保存
+                    if (!currentPassData.expires_at) {
+                        const expires = new Date();
+                        expires.setMonth(expires.getMonth() + 3);
+
+                        const updateData = {
+                            activated_at: Timestamp.fromDate(now),
+                            expires_at: Timestamp.fromDate(expires)
+                        };
+
+                        await updateDoc(docRef, updateData);
+                        currentPassData.activated_at = updateData.activated_at;
+                        currentPassData.expires_at = updateData.expires_at;
+                    }
+
+                    // 有効期限切れチェック
+                    const expireDateObj = currentPassData.expires_at.toDate();
+                    if (now > expireDateObj) {
+                        showErrorModal(`このパスポートは有効期限（${expireDateObj.toLocaleDateString()}）が切れています。`);
+                        localStorage.removeItem('ono_active_code');
+                        showView('not-activated-view');
+                        return;
+                    }
+
                     if (!currentPassData.favorites) currentPassData.favorites = [];
                     
                     localStorage.setItem('ono_active_code', code);
@@ -354,30 +381,6 @@
             document.getElementById('error-modal').classList.add('hidden');
         }
 
-        window.testActivate = async function() {
-            const randomCode = 'bag-' + Math.random().toString(36).substring(2, 8);
-            const now = new Date();
-            const expires = new Date();
-            expires.setMonth(expires.getMonth() + 3);
-
-            const initialData = {
-                code: randomCode,
-                activated_at: Timestamp.fromDate(now),
-                expires_at: Timestamp.fromDate(expires),
-                used_stores: [],
-                favorites: []
-            };
-
-            showView('loading-view');
-            try {
-                await setDoc(doc(db, "codes", randomCode), initialData);
-                checkAndInitPass(randomCode);
-            } catch (err) {
-                alert("テスト用コードの作成に失敗しました。");
-                showView('not-activated-view');
-            }
-        };
-
         function showView(viewId) {
             ['not-activated-view', 'loading-view', 'activated-view'].forEach(id => {
                 const el = document.getElementById(id);
@@ -448,12 +451,8 @@
                     </div>
                 </div>
 
-                <button onclick="showSellerStoresOnly()" class="w-full bg-amber-100 hover:bg-amber-200 text-amber-900 font-bold py-3 px-4 rounded-xl transition text-xs flex items-center justify-center gap-1 mb-4">
+                <button onclick="showSellerStoresOnly()" class="w-full bg-amber-100 hover:bg-amber-200 text-amber-900 font-bold py-3 px-4 rounded-xl transition text-xs flex items-center justify-center gap-1">
                     <span>📍</span> 珈琲バッグが買えるお店（設置店舗）を探す
-                </button>
-
-                <button onclick="testActivate()" class="w-full bg-gray-100 hover:bg-gray-200 text-gray-500 font-bold py-2 px-4 rounded-lg text-[11px] transition">
-                    【テスト】新規コードを作成してDB登録＆読み込み
                 </button>
             </div>
         </section>
@@ -473,7 +472,7 @@
         <div id="error-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 hidden">
             <div class="bg-white rounded-xl p-6 w-full max-w-xs text-center shadow-lg border-2 border-red-500">
                 <div class="text-red-500 font-bold text-4xl mb-2">✕ NG</div>
-                <h3 class="font-bold text-gray-800 text-base mb-2">未登録のQRコードです</h3>
+                <h3 class="font-bold text-gray-800 text-base mb-2">エラー</h3>
                 <p id="error-message" class="text-xs text-gray-600 mb-4 break-all"></p>
                 <button onclick="closeErrorModal()" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 rounded-lg text-xs">
                     閉じる
