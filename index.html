@@ -76,7 +76,7 @@
 
                     const now = new Date();
 
-                    // 初回認証時（expires_atがまだ未設定の場合）、自動で「現在から3ヶ月」の期限を設定してDB保存
+                    // 初回認証時（expires_atが未設定の場合）、自動で「現在から3ヶ月」の期限を設定
                     if (!currentPassData.expires_at) {
                         const expires = new Date();
                         expires.setMonth(expires.getMonth() + 3);
@@ -168,11 +168,17 @@
             renderStoresList(targetStores);
         };
 
+        // 利用済み店舗IDリストを取得（文字列形式・オブジェクト形式の双方に対応）
+        function getUsedStoreIds() {
+            const rawUsed = (currentPassData && currentPassData.used_stores) ? currentPassData.used_stores : [];
+            return rawUsed.map(item => typeof item === 'string' ? item : item.store_id);
+        }
+
         function renderStoresList(storesToRender) {
             const storeListEl = document.getElementById('store-list');
             storeListEl.innerHTML = '';
 
-            const usedStores = (currentPassData && currentPassData.used_stores) ? currentPassData.used_stores : [];
+            const usedStoreIds = getUsedStoreIds();
             const favorites = (currentPassData && currentPassData.favorites) ? currentPassData.favorites : [];
 
             if (storesToRender.length === 0) {
@@ -182,7 +188,7 @@
 
             storesToRender.forEach((store) => {
                 const storeId = store.id;
-                const isUsed = usedStores.includes(storeId);
+                const isUsed = usedStoreIds.includes(storeId);
                 const isFav = favorites.includes(storeId);
 
                 const mapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(store.name + ' ' + (store.address||''))}`;
@@ -273,17 +279,21 @@
         };
 
         function renderHistoryList() {
-            const usedStores = (currentPassData && currentPassData.used_stores) ? currentPassData.used_stores : [];
+            const rawUsed = (currentPassData && currentPassData.used_stores) ? currentPassData.used_stores : [];
             const historyListEl = document.getElementById('history-list');
             historyListEl.innerHTML = '';
 
-            if (usedStores.length === 0) {
+            if (rawUsed.length === 0) {
                 historyListEl.innerHTML = `<p class="text-xs text-gray-400 text-center py-4">まだ利用した店舗はありません。</p>`;
                 return;
             }
 
-            allStores.forEach((store) => {
-                if (usedStores.includes(store.id)) {
+            rawUsed.forEach((item) => {
+                const storeId = typeof item === 'string' ? item : item.store_id;
+                const usedAt = item.used_at ? item.used_at.toDate().toLocaleString('ja-JP', {month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '';
+                const store = allStores.find(s => s.id === storeId);
+
+                if (store) {
                     const historyItem = document.createElement('div');
                     historyItem.className = 'flex justify-between items-center bg-gray-50 p-3 rounded-lg text-xs border';
                     historyItem.innerHTML = `
@@ -291,13 +301,17 @@
                             <div class="font-bold text-gray-800">${store.name}</div>
                             <div class="text-[10px] text-gray-400">🎁 ${store.benefit}</div>
                         </div>
-                        <span class="text-green-600 font-bold shrink-0">✓ 利用済み</span>
+                        <div class="text-right shrink-0">
+                            <span class="text-green-600 font-bold block">✓ 利用済み</span>
+                            ${usedAt ? `<span class="text-[9px] text-gray-400 block">${usedAt}</span>` : ''}
+                        </div>
                     `;
                     historyListEl.appendChild(historyItem);
                 }
             });
         }
 
+        // 店頭消し込み処理（日時記録対応）
         window.promptPinAndUse = async function(code, storeId, storeName, correctPin) {
             const inputPin = prompt(`【${storeName}】\n店員さんに4桁の暗証番号を聞いて入力してください:`);
             if (inputPin === null) return;
@@ -305,8 +319,13 @@
             if (inputPin.trim() === correctPin.trim()) {
                 try {
                     const docRef = doc(db, "codes", code);
+                    const redemptionData = {
+                        store_id: storeId,
+                        used_at: Timestamp.now()
+                    };
+
                     await updateDoc(docRef, {
-                        used_stores: arrayUnion(storeId)
+                        used_stores: arrayUnion(redemptionData)
                     });
                     alert(`🎉 ${storeName}の特典を利用済みにしました！`);
                     window.location.reload();
