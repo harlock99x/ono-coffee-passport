@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>小野めぐり珈琲バッグ 店舗管理画面</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- HTML5 QR Code Scanner Library -->
+    <script src="https://unpkg.com/html5-qrcode" defer></script>
+    <!-- Firebase SDK (v9 Modular) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getFirestore, doc, getDoc, updateDoc, collection, getDocs, arrayUnion, Timestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+        const firebaseConfig = {
+          apiKey: "AIzaSyAcLiObsI5p_dpGfpERStBHx2J322sO95U",
+          authDomain: "ono-coffee-passport.firebaseapp.com",
+          projectId: "ono-coffee-passport",
+          storageBucket: "ono-coffee-passport.firebasestorage.app",
+          messagingSenderId: "537440513359",
+          appId: "1:537440513359:web:973793d14ff9b6e382693a",
+          measurementId: "G-585ENGFG8G"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        let currentStore = null;
+        let html5QrCode = null;
+
+        window.addEventListener('DOMContentLoaded', async () => {
+            // 保存されている店舗ログイン状態（ローカルストレージ）の復元チェック
+            const savedStoreId = localStorage.getItem('ono_store_id');
+            if (savedStoreId) {
+                await checkAndRestoreStore(savedStoreId);
+            }
+        });
+
+        async function checkAndRestoreStore(storeId) {
+            try {
+                const storeDoc = await getDoc(doc(db, "stores", storeId));
+                if (storeDoc.exists()) {
+                    loginAsStore({ id: storeDoc.id, ...storeDoc.data() });
+                } else {
+                    localStorage.removeItem('ono_store_id');
+                }
+            } catch (e) {
+                console.error("店舗復元エラー:", e);
+            }
+        }
+
+        // 🏪 お店コード ＋ PIN による直接認証ログイン
+        window.handleStoreLogin = async function() {
+            const storeIdInput = document.getElementById('store-code-input').value.trim();
+            const inputPin = document.getElementById('store-pin-input').value.trim();
+
+            if (!storeIdInput) {
+                alert("お店コードを入力してください。");
+                return;
+            }
+
+            if (!inputPin) {
+                alert("暗証番号（PIN）を入力してください。");
+                return;
+            }
+
+            const loginBtn = document.getElementById('login-btn');
+            loginBtn.disabled = true;
+            loginBtn.innerText = '確認中...';
+
+            try {
+                const docRef = doc(db, "stores", storeIdInput);
+                const docSnap = await getDoc(docRef);
+
+                if (!docSnap.exists()) {
+                    alert(`❌ お店コード「${storeIdInput}」が見つかりませんでした。`);
+                    loginBtn.disabled = false;
+                    loginBtn.innerText = '店舗ダッシュボードを開く';
+                    return;
+                }
+
+                const storeData = docSnap.data();
+                const correctPin = (storeData.pin || '1234').trim();
+
+                if (inputPin === correctPin) {
+                    localStorage.setItem('ono_store_id', docSnap.id);
+                    loginAsStore({ id: docSnap.id, ...storeData });
+                } else {
+                    alert("❌ 暗証番号（PIN）が違います。");
+                }
+            } catch (err) {
+                console.error("ログインエラー:", err);
+                alert("通信エラーが発生しました。");
+            } finally {
+                loginBtn.disabled = false;
+                loginBtn.innerText = '店舗ダッシュボードを開く';
+            }
+        };
+
+        function loginAsStore(store) {
+            currentStore = store;
+            document.getElementById('login-view').classList.add('hidden');
+            document.getElementById('store-dashboard').classList.remove('hidden');
+
+            document.getElementById('header-store-name').innerText = store.name;
+            document.getElementById('header-store-id').innerText = `ID: ${store.id}`;
+            document.getElementById('info-store-benefit').innerText = store.benefit || '未登録';
+
+            loadStoreRedemptionHistory();
+        }
+
+        window.storeLogout = function() {
+            if (confirm("ログアウトしますか？")) {
+                localStorage.removeItem('ono_store_id');
+                currentStore = null;
+                document.getElementById('store-dashboard').classList.add('hidden');
+                document.getElementById('login-view').classList.remove('hidden');
+                document.getElementById('store-code-input').value = '';
+                document.getElementById('store-pin-input').value = '';
+            }
+        };
+
+        // 自店舗の利用履歴読み込み
+        async function loadStoreRedemptionHistory() {
+            const historyListEl = document.getElementById('store-history-list');
+            const countEl = document.getElementById('store-use-count');
+            historyListEl.innerHTML = '<p class="text-xs text-gray-400 py-3 text-center">読み込み中...</p>';
+
+            try {
+                const snapshot = await getDocs(collection(db, "codes"));
+                let redemptions = [];
+
+                snapshot.forEach(docSnap => {
+                    const codeData = docSnap.data();
+                    const used = codeData.used_stores || [];
+
+                    used.forEach(item => {
+                        const sId = typeof item === 'string' ? item : (item.store_id || item.id);
+                        if (sId === currentStore.id) {
+                            redemptions.push({
+                                code: docSnap.id,
+                                used_at: (item && item.used_at) ? item.used_at.toDate() : null
+                            });
+                        }
+                    });
+                });
+
+                redemptions.sort((a, b) => {
+                    if (!a.used_at) return 1;
+                    if (!b.used_at) return -1;
+                    return b.used_at - a.used_at;
+                });
+
+                countEl.innerText = `${redemptions.length} 回`;
+
+                if (redemptions.length === 0) {
+                    historyListEl.innerHTML = '<p class="text-xs text-gray-400 py-6 text-center">まだ利用履歴がありません。</p>';
+                    return;
+                }
+
+                historyListEl.innerHTML = '';
+                redemptions.forEach(r => {
+                    const item = document.createElement('div');
+                    item.className = 'flex justify-between items-center p-2.5 bg-gray-50 border rounded-lg text-xs';
+                    const dateStr = r.used_at ? r.used_at.toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '日時未記録';
+                    item.innerHTML = `
+                        <div>
+                            <div class="font-mono font-bold text-gray-800">${r.code}</div>
+                            <div class="text-[10px] text-gray-400">${dateStr}</div>
+                        </div>
+                        <span class="text-green-600 font-bold bg-green-50 px-2 py-0.5 rounded border border-green-200">利用済</span>
+                    `;
+                    historyListEl.appendChild(item);
+                });
+            } catch (err) {
+                console.error("履歴読み込み失敗:", err);
+                historyListEl.innerHTML = '<p class="text-xs text-red-500 py-3 text-center">履歴の読み込みに失敗しました</p>';
+            }
+        }
+
+        // --- 特典消し込み処理 ---
+        window.processRedemption = async function(inputCode) {
+            const code = inputCode.trim().toUpperCase();
+            if (!code) {
+                alert("シリアルコードを入力してください。");
+                return;
+            }
+
+            if (!confirm(`シリアルコード「${code}」の特典を利用済みにしますか？\n提供特典: ${currentStore.benefit}`)) {
+                return;
+            }
+
+            try {
+                const docRef = doc(db, "codes", code);
+                const docSnap = await getDoc(docRef);
+
+                if (!docSnap.exists()) {
+                    alert(`❌ コード「${code}」は存在しません。`);
+                    return;
+                }
+
+                const codeData = docSnap.data();
+                const now = new Date();
+
+                // 初回認証処理（未開始なら3ヶ月セット）
+                if (!codeData.expires_at) {
+                    const expires = new Date();
+                    expires.setMonth(expires.getMonth() + 3);
+                    await updateDoc(docRef, {
+                        activated_at: Timestamp.fromDate(now),
+                        expires_at: Timestamp.fromDate(expires)
+                    });
+                    codeData.expires_at = Timestamp.fromDate(expires);
+                }
+
+                // 期限切れチェック
+                const expireDate = codeData.expires_at.toDate();
+                if (now > expireDate) {
+                    alert(`❌ このパスポートは有効期限（${expireDate.toLocaleDateString()}）が切れています！`);
+                    return;
+                }
+
+                // 既利用チェック
+                const used = codeData.used_stores || [];
+                const alreadyUsed = used.some(item => {
+                    const sId = typeof item === 'string' ? item : (item.store_id || item.id);
+                    return sId === currentStore.id;
+                });
+
+                if (alreadyUsed) {
+                    alert(`⚠️ このパスポートは既に「${currentStore.name}」で利用済みです！`);
+                    return;
+                }
+
+                // 利用登録
+                const redemptionData = {
+                    store_id: currentStore.id,
+                    used_at: Timestamp.now()
+                };
+
+                await updateDoc(docRef, {
+                    used_stores: arrayUnion(redemptionData)
+                });
+
+                alert(`🎉 消込完了！\nコード: ${code}\nお客様に特典を提供してください。`);
+                document.getElementById('manual-input-code').value = '';
+                loadStoreRedemptionHistory();
+            } catch (err) {
+                console.error("消込エラー:", err);
+                alert("消込処理に失敗しました。");
+            }
+        };
+
+        // --- カメラQRスキャナー ---
+        window.startStoreScanner = function() {
+            document.getElementById('scanner-container').classList.remove('hidden');
+            html5QrCode = new Html5Qrcode("reader");
+
+            html5QrCode.start(
+                { facingMode: "environment" },
+                { fps: 10, qrbox: { width: 220, height: 220 } },
+                async (decodedText) => {
+                    await stopStoreScanner();
+                    let extractedCode = decodedText;
+                    try {
+                        const url = new URL(decodedText);
+                        const codeParam = url.searchParams.get("code");
+                        if (codeParam) extractedCode = codeParam;
+                    } catch (e) {}
+                    processRedemption(extractedCode);
+                },
+                (errorMessage) => {}
+            ).catch((err) => {
+                alert("カメラの起動に失敗しました。");
+                document.getElementById('scanner-container').classList.add('hidden');
+            });
+        };
+
+        window.stopStoreScanner = async function() {
+            if (html5QrCode) {
+                try {
+                    await html5QrCode.stop();
+                    html5QrCode = null;
+                } catch (err) {}
+            }
+            document.getElementById('scanner-container').classList.add('hidden');
+        };
+    </script>
+</head>
+<body class="bg-slate-100 text-gray-800 font-sans min-h-screen">
+
+    <header class="bg-slate-800 text-white p-4 shadow text-center">
+        <h1 class="text-base font-bold flex items-center justify-center gap-1">
+            <span>🏪</span> 小野めぐり珈琲バッグ 店舗管理
+        </h1>
+    </header>
+
+    <main class="max-w-md mx-auto p-4 pb-16">
+
+        <!-- 店舗ログイン画面（入力式） -->
+        <section id="login-view" class="bg-white p-6 rounded-2xl shadow-sm mt-8 border">
+            <h2 class="font-bold text-center text-base mb-1 text-gray-800">店舗スタッフ ログイン</h2>
+            <p class="text-xs text-gray-500 text-center mb-5">自店舗の「お店コード」と「暗証番号」を入力してください</p>
+
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-xs font-bold text-gray-600 mb-1">お店コード（店舗ID）</label>
+                    <input type="text" id="store-code-input" placeholder="例: store_01" class="w-full border p-2.5 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-600">
+                </div>
+
+                <div>
+                    <label class="block text-xs font-bold text-gray-600 mb-1">暗証番号（4桁PIN）</label>
+                    <input type="password" id="store-pin-input" maxlength="4" placeholder="例: 1234" class="w-full border p-2.5 rounded-lg text-sm text-center tracking-widest font-bold focus:outline-none focus:ring-2 focus:ring-slate-600" onkeydown="if(event.key==='Enter') handleStoreLogin()">
+                </div>
+
+                <button id="login-btn" onclick="handleStoreLogin()" class="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-3 rounded-lg shadow text-sm transition">
+                    店舗ダッシュボードを開く
+                </button>
+            </div>
+        </section>
+
+        <!-- 店舗専用ダッシュボード -->
+        <section id="store-dashboard" class="hidden space-y-4">
+
+            <!-- 店舗情報ヘッダーカード -->
+            <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex justify-between items-start">
+                <div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-[10px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded font-bold">ログイン中</span>
+                        <span id="header-store-id" class="text-xs font-mono text-gray-400"></span>
+                    </div>
+                    <h2 id="header-store-name" class="font-bold text-base text-gray-800 mt-1"></h2>
+                </div>
+                <button onclick="storeLogout()" class="text-xs text-gray-400 hover:text-red-600 underline font-bold transition">
+                    ログアウト
+                </button>
+            </div>
+
+            <!-- 自店舗の提供特典内容 -->
+            <div class="bg-amber-50 p-3.5 rounded-xl border border-amber-200 text-xs">
+                <div class="font-bold text-amber-900 mb-1 flex items-center gap-1">
+                    <span>🎁</span> 登録されている提供特典
+                </div>
+                <div id="info-store-benefit" class="text-amber-800 font-bold text-sm"></div>
+            </div>
+
+            <!-- 特典消し込みアクション -->
+            <div class="bg-white p-5 rounded-xl shadow-sm border space-y-4">
+                <h3 class="font-bold text-gray-800 text-sm border-b pb-2">🎟️ 特典の消し込み（お客様対応）</h3>
+
+                <button onclick="startStoreScanner()" class="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-3.5 px-4 rounded-xl shadow transition flex items-center justify-center gap-2 text-sm">
+                    <span>📷</span> お客様のQRを読み取る
+                </button>
+
+                <div class="relative flex items-center justify-center my-2">
+                    <div class="border-t w-full border-gray-200"></div>
+                    <span class="bg-white px-2 text-[11px] text-gray-400">または</span>
+                </div>
+
+                <!-- シリアルコード手入力 -->
+                <div>
+                    <label class="block text-xs font-bold text-gray-600 mb-1">コードを直接手入力</label>
+                    <div class="flex gap-2">
+                        <input type="text" id="manual-input-code" placeholder="例: ONO-0001" class="flex-1 border p-2 rounded-lg text-xs uppercase focus:outline-none focus:ring-2 focus:ring-amber-600">
+                        <button onclick="processRedemption(document.getElementById('manual-input-code').value)" class="bg-slate-800 hover:bg-slate-900 text-white font-bold px-4 py-2 rounded-lg text-xs transition shrink-0">
+                            消込
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 自店舗の利用履歴 -->
+            <div class="bg-white p-5 rounded-xl shadow-sm border space-y-3">
+                <div class="flex justify-between items-center border-b pb-2">
+                    <h3 class="font-bold text-gray-800 text-sm">📊 当店の利用実績</h3>
+                    <div class="text-xs">
+                        累計: <span id="store-use-count" class="font-bold text-amber-700">0 回</span>
+                    </div>
+                </div>
+
+                <div id="store-history-list" class="space-y-2 max-h-64 overflow-y-auto pr-1"></div>
+            </div>
+
+        </section>
+
+    </main>
+
+    <!-- QRスキャナーモーダル -->
+    <div id="scanner-container" class="fixed inset-0 bg-black/80 z-50 flex flex-col items-center justify-center p-4 hidden">
+        <div class="bg-white rounded-xl p-4 w-full max-w-xs text-center shadow-2xl">
+            <h3 class="font-bold text-gray-800 mb-2 text-sm">お客様のQRコードを枠内にかざしてください</h3>
+            <div id="reader" class="overflow-hidden rounded-lg"></div>
+            <button onclick="stopStoreScanner()" class="mt-4 w-full bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 rounded-lg text-xs">
+                キャンセル
+            </button>
+        </div>
+    </div>
+
+</body>
+</html>
